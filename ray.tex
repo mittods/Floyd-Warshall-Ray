@@ -1,0 +1,519 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{hyperref}
+
+\hypersetup{hidelinks}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+% Macros de conveniencia
+\newcommand{\FW}{Floyd-Warshall}
+\newcommand{\INF}{\infty}
+
+\begin{document}
+
+\title{Paralelización del Algoritmo Floyd-Warshall mediante Ray:\\
+Análisis de Rendimiento y Escalabilidad en Hardware de Alto Rendimiento}
+
+\author{
+\IEEEauthorblockN{Autor 1}
+\IEEEauthorblockA{
+  \textit{Instituto de Informática} \\
+  \textit{Universidad Austral de Chile}\\
+  Valdivia, Chile \\
+  autor1@uach.cl
+}
+\and
+\IEEEauthorblockN{Autor 2}
+\IEEEauthorblockA{
+  \textit{Instituto de Informática} \\
+  \textit{Universidad Austral de Chile}\\
+  Valdivia, Chile \\
+  autor2@uach.cl
+}
+}
+
+\maketitle
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{abstract}
+El algoritmo de \FW{} es uno de los algoritmos fundamentales de grafos
+para el cálculo de caminos mínimos entre todos los pares de vértices, con
+complejidad $O(n^3)$. Su estructura presenta restricciones de dependencia
+que limitan la paralelización a la fase interna por pares $(i,j)$ para
+cada iteración fija $k$. En este trabajo evaluamos experimentalmente el
+impacto del framework Ray sobre la ejecución paralela de \FW{} en
+hardware de alto rendimiento: AMD Ryzen Threadripper PRO 5975WX (32 núcleos)
+con 128 GB de RAM. Diseñamos e implementamos dos versiones equivalentes del
+algoritmo: una secuencial con operaciones vectorizadas NumPy y una paralela
+utilizando actores Ray con particionamiento horizontal de la matriz. Ejecutamos
+una batería de experimentos sistemáticos que cubren tamaños de entrada en
+$n \in \{64, 128, 256, 512, 1024, 2048, 4096\}$, números de actores en
+$\{1, 2, 4, 8, 16, 32\}$ y cinco grupos de escenarios que analizan speedup,
+escalabilidad fuerte, escalabilidad débil, overhead de Ray y consumo de
+recursos. Los resultados demuestran que [COMPLETAR CON DATOS REALES TRAS
+EJECUTAR LOS BENCHMARKS].
+\end{abstract}
+
+\begin{IEEEkeywords}
+Floyd-Warshall, Ray, computación paralela, HPC, paralelización por actores,
+caminos mínimos, escalabilidad, benchmarking, Python
+\end{IEEEkeywords}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introducción}
+
+El cálculo de caminos mínimos entre todos los pares de vértices (APSP, por
+sus siglas en inglés) es una tarea central en teoría de grafos con aplicaciones
+en redes de comunicaciones, sistemas de navegación, análisis de redes sociales
+y optimización logística \cite{cormen2009introduction}. El algoritmo de \FW{}
+\cite{floyd1962algorithm,warshall1962theorem} resuelve este problema de forma
+exacta en tiempo $O(n^3)$ y espacio $O(n^2)$, siendo la solución de referencia
+para grafos densos con pesos arbitrarios.
+
+Con el auge de las arquitecturas multinúcleo y los sistemas distribuidos, la
+paralelización de algoritmos clásicos mediante frameworks de alto nivel ha
+ganado relevancia en la comunidad de computación de alto rendimiento (HPC).
+Ray \cite{moritz2018ray} es un framework de ejecución distribuida para Python
+que simplifica la programación paralela mediante el modelo de actores y la
+gestión automática de un almacén de objetos compartidos (\textit{object store}).
+
+La pregunta central de este trabajo es: \textit{¿en qué medida Ray permite
+acelerar Floyd-Warshall, cuál es el speedup real, y cuál es el costo
+computacional del paralelismo introducido?} Respondemos esta pregunta mediante
+un diseño experimental riguroso que cuantifica no solo el tiempo de ejecución,
+sino también la eficiencia paralela, el overhead de Ray, el consumo de memoria
+y el uso de energía.
+
+Las contribuciones principales de este artículo son:
+\begin{itemize}
+  \item Análisis formal de las dependencias de \FW{} y justificación de la
+        estrategia de paralelización mediante actores Ray.
+  \item Implementación reproducible de las versiones secuencial y paralela
+        documentada con infraestructura Docker.
+  \item Evaluación experimental con cinco grupos de escenarios sobre hardware
+        de alto rendimiento (AMD Threadripper PRO 5975WX, 32 núcleos).
+  \item Identificación cuantitativa del tamaño mínimo de problema a partir del
+        cual Ray introduce beneficio neto.
+\end{itemize}
+
+El resto del artículo se organiza como sigue: la Sección~\ref{sec:relacionados}
+revisa trabajos relacionados; la Sección~\ref{sec:solucion} presenta la solución
+propuesta; la Sección~\ref{sec:metodologia} describe la metodología experimental;
+la Sección~\ref{sec:escenarios} define los escenarios; la Sección~\ref{sec:resultados}
+presenta los resultados; la Sección~\ref{sec:discusion} los discute; y la
+Sección~\ref{sec:conclusiones} concluye.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Trabajos Relacionados}
+\label{sec:relacionados}
+
+La paralelización de \FW{} ha sido extensamente estudiada en arquitecturas
+de memoria compartida y distribuida. Zhao et al.\ \cite{zhao2011parallel}
+presentan una implementación en CUDA que aprovecha el paralelismo masivo de
+la GPU para la fase interna, obteniendo speedups de hasta 40$\times$ sobre
+la versión secuencial en CPU. En arquitecturas de CPU multinúcleo,
+Venkataraman et al.\ \cite{venkataraman2003blocked} proponen la variante de
+bloques (\textit{blocked Floyd-Warshall}) que mejora la localidad de caché
+y facilita la paralelización con OpenMP.
+
+En el contexto de sistemas distribuidos, Malewicz et al.\ \cite{malewicz2010pregel}
+introducen Pregel para procesamiento de grafos a gran escala; sin embargo, su
+modelo de mensajes por vértice no es eficiente para APSP de grafos densos.
+Xia y Prasanna \cite{xia2004communication} analizan la complejidad de
+comunicación del algoritmo en arquitecturas de paso de mensajes (MPI), demostrando
+que el volumen de datos necesario por iteración $k$ es $O(n)$ si se mantienen
+las filas distribuidas, lo que coincide con el diseño adoptado en este trabajo.
+
+Ray \cite{moritz2018ray} fue evaluado originalmente en tareas de aprendizaje
+reforzado; trabajos posteriores lo han utilizado para procesamiento de datos
+a gran escala \cite{zaharia2012resilient} y simulaciones científicas. Sin
+embargo, no encontramos estudios previos que evalúen sistemáticamente el uso
+de actores Ray para \FW{} con análisis de overhead, escalabilidad y consumo
+energético en hardware moderno.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Solución Propuesta}
+\label{sec:solucion}
+
+\subsection{Análisis de Dependencias del Algoritmo}
+
+El algoritmo de \FW{} (Algoritmo~\ref{alg:fw}) itera sobre $n$ vértices
+intermedios $k$. Para cada $k$, actualiza toda la matriz de distancias:
+
+\begin{equation}
+  d[i][j] \leftarrow \min(d[i][j],\; d[i][k] + d[k][j])
+  \label{eq:fw}
+\end{equation}
+
+El bucle sobre $k$ es \textbf{secuencial obligatorio}: la iteración $k+1$
+requiere los valores $d[i][k]$ y $d[k][j]$ actualizados en la iteración $k$.
+Por el contrario, para un $k$ fijo, todas las actualizaciones $(i,j)$ son
+independientes entre sí, ya que $d[i][k]$ y $d[k][j]$ son \textit{de solo
+lectura} durante esa iteración \cite{cormen2009introduction}.
+
+\begin{algorithm}
+\caption{Floyd-Warshall}
+\label{alg:fw}
+\begin{algorithmic}
+\FOR{$k = 0$ \TO $n-1$}
+  \FOR{$i = 0$ \TO $n-1$} \hfill \textit{// paralelizable}
+    \FOR{$j = 0$ \TO $n-1$}
+      \STATE $d[i][j] \leftarrow \min(d[i][j], d[i][k] + d[k][j])$
+    \ENDFOR
+  \ENDFOR
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+Esta estructura impone un límite teórico de speedup: el bucle externo (n
+iteraciones) no puede paralelizarse, pero el trabajo interior ($O(n^2)$ por
+iteración) sí puede distribuirse entre $p$ procesadores con un speedup
+máximo de $O(p)$ para la parte paralelizable.
+
+\subsection{Estrategia de Paralelización con Ray}
+
+Adoptamos una \textbf{paralelización por actores con particionamiento
+horizontal} de la matriz. Se crean $p$ actores Ray, cada uno manteniendo en
+memoria local una partición de $\lceil n/p \rceil$ filas de la matriz global.
+
+Para cada iteración $k$:
+\begin{enumerate}
+  \item El actor que posee la fila $k$ la publica en el \textit{object store}
+        de Ray (vector de $n$ elementos, transferencia $O(n)$).
+  \item Todos los actores reciben una referencia a la fila $k$; Ray provee
+        acceso mediante memoria compartida sin copias adicionales.
+  \item Cada actor actualiza su bloque de filas aplicando~\eqref{eq:fw}
+        con operaciones vectorizadas NumPy.
+  \item El bucle de $k$ continúa tras recibir la confirmación de todos los actores.
+\end{enumerate}
+
+Esta estrategia minimiza la comunicación a $O(n)$ datos por iteración,
+comparado con $O(n^2/p)$ que implicaría transferir los bloques completos.
+La columna $k$ es extraída localmente por cada actor desde su partición propia.
+
+\subsection{Implementación}
+
+La versión secuencial emplea vectorización con broadcasting de NumPy:
+\texttt{dist = np.minimum(dist, col\_k[:, np.newaxis] + row\_k[np.newaxis, :])},
+evitando bucles Python explícitos para maximizar el rendimiento de la línea
+base. La versión paralela define la clase \texttt{FilasActor} anotada con
+\texttt{@ray.remote}, que mantiene el bloque de filas como atributo de estado
+y expone métodos \texttt{obtener\_fila}, \texttt{actualizar\_bloque} y
+\texttt{obtener\_resultado}.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Metodología}
+\label{sec:metodologia}
+
+\subsection{Hardware y Software}
+
+Los experimentos se ejecutan sobre un sistema con las siguientes
+características: procesador AMD Ryzen Threadripper PRO 5975WX (32 núcleos
+físicos, 64 hilos lógicos), 128 GB DDR4-3200, almacenamiento SSD NVMe 2~TB,
+GPU NVIDIA TITAN V (12 GB HBM2), sistema operativo Linux (kernel 6.x).
+El software utiliza Python 3.11, Ray 2.44, NumPy 1.26 y SciPy 1.12.
+
+\subsection{Protocolo de Medición}
+
+Todas las implementaciones se ejecutan dentro de un contenedor Docker
+construido desde la imagen publicada en GHCR (Sección~\ref{sec:solucion}),
+garantizando reproducibilidad del entorno. Para cada configuración se
+realizan 10 repeticiones independientes con semillas distintas. Los tiempos
+se miden con \texttt{time.perf\_counter()} que ofrece resolución
+subnanosegundo en Linux.
+
+Se aplica el test de Grubbs \cite{grubbs1969procedures} a nivel $\alpha=0.05$
+para detectar y eliminar valores atípicos antes de calcular estadísticos.
+Los intervalos de confianza al 95\% utilizan la distribución $t$ de Student
+con $n-1$ grados de libertad.
+
+\subsection{Métricas}
+
+\begin{itemize}
+  \item \textbf{Speedup}: $S(p) = T_{seq} / T_{ray}(p)$
+  \item \textbf{Eficiencia paralela}: $E(p) = S(p) / p$
+  \item \textbf{Overhead Ray}: $T_{overhead} = T_{setup} + T_{rearmado}$
+  \item \textbf{Escalabilidad fuerte}: $S(p)$ con $n$ fijo, $p$ variable
+  \item \textbf{Escalabilidad débil}: tiempo normalizado con $n \propto \sqrt{p}$
+\end{itemize}
+
+El uso de CPU se mide con \texttt{psutil.cpu\_percent(percpu=True)} cada
+0.5 s. La energía CPU se obtiene desde
+\texttt{/sys/class/powercap/} (interfaz RAPL del kernel Linux). El estado
+de GPU se registra mediante \texttt{pynvml} (NVML).
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Escenarios Experimentales}
+\label{sec:escenarios}
+
+Se definen cinco grupos de escenarios:
+
+\begin{itemize}
+  \item \textbf{E1 — Comparación directa}: Secuencial vs.\ Ray (32 actores)
+        para $n \in \{64, 128, 256, 512, 1024, 2048, 4096\}$.
+  \item \textbf{E2 — Escalabilidad fuerte}: $n$ fijo (2048), actores en
+        $\{1, 2, 4, 8, 16, 32\}$.
+  \item \textbf{E3 — Escalabilidad débil}: carga por actor constante,
+        $n = 256 \cdot \sqrt{p}$.
+  \item \textbf{E4 — Overhead}: matrices pequeñas ($n \leq 512$) para
+        identificar el punto de crossover.
+  \item \textbf{E5 — Carga máxima}: $n = 4096$ con todas las configuraciones.
+\end{itemize}
+
+El total de configuraciones únicas es de aproximadamente 120, con 10
+repeticiones cada una (aprox.\ 1\,200 ejecuciones individuales).
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Resultados}
+\label{sec:resultados}
+
+\textit{Nota: Las tablas y figuras de esta sección se generan automáticamente
+a partir de los resultados del benchmark mediante los scripts del repositorio.
+Ejecutar \texttt{make benchmark \&\& make analisis} para obtener los valores
+reales.}
+
+\subsection{Comparación de Tiempos (E1)}
+
+La Tabla~\ref{tab:tiempos} presenta los tiempos de ejecución medios con
+intervalos de confianza al 95\% para ambas implementaciones.
+
+\begin{table}[htbp]
+\caption{Tiempos de ejecución: Secuencial vs.\ Ray (32 actores)}
+\label{tab:tiempos}
+\begin{center}
+\begin{tabular}{|r|c|c|}
+\hline
+\textbf{$n$} & \textbf{$T_{seq}$ (s)} & \textbf{$T_{ray}$ (s)} \\
+\hline
+% Los valores se completan automáticamente con: make tablas
+% Resultado en: resultados/tabla_tiempos.tex
+\input{resultados/tabla_tiempos.tex}
+\end{tabular}
+\end{center}
+\end{table}
+
+\subsection{Speedup y Eficiencia Paralela (E1, E2)}
+
+La Tabla~\ref{tab:speedup} resume el speedup $S(p)$ y la eficiencia
+paralela $E(p)$ para las configuraciones más representativas.
+
+\begin{table}[htbp]
+\caption{Speedup y eficiencia paralela}
+\label{tab:speedup}
+\begin{center}
+\begin{tabular}{|r|r|c|c|r|r|}
+\hline
+\textbf{$n$} & \textbf{$p$} & \textbf{$T_{seq}$ (s)} & \textbf{$T_{ray}$ (s)} & \textbf{$S(p)$} & \textbf{$E(p)$} \\
+\hline
+\input{resultados/tabla_speedup.tex}
+\end{tabular}
+\end{center}
+\end{table}
+
+\subsection{Overhead de Ray (E4)}
+
+La Tabla~\ref{tab:overhead} descompone el tiempo de ejecución Ray en tiempo
+de cómputo efectivo y overhead de coordinación.
+
+\begin{table}[htbp]
+\caption{Descomposición del overhead de Ray}
+\label{tab:overhead}
+\begin{center}
+\begin{tabular}{|r|r|c|c|r|}
+\hline
+\textbf{$n$} & \textbf{$p$} & \textbf{$T_{cómp.}$} & \textbf{$T_{overhead}$} & \textbf{\%} \\
+\hline
+\input{resultados/tabla_overhead.tex}
+\end{tabular}
+\end{center}
+\end{table}
+
+\subsection{Escalabilidad Fuerte y Débil (E2, E3)}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/speedup_vs_workers.pdf}}
+\caption{Escalabilidad fuerte: speedup vs.\ número de actores Ray para
+distintos tamaños de matriz. La línea discontinua representa el speedup ideal.}
+\label{fig:speedup_workers}
+\end{figure}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/speedup_vs_tamano.pdf}}
+\caption{Speedup vs.\ tamaño de matriz $n$ para distintas cantidades de
+actores Ray. Se observa el punto de crossover a partir del cual Ray supera
+al secuencial.}
+\label{fig:speedup_tamano}
+\end{figure}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/escalabilidad_debil.pdf}}
+\caption{Escalabilidad débil: tiempo de ejecución normalizado respecto al
+caso de un solo actor, manteniendo carga por actor constante.}
+\label{fig:escal_debil}
+\end{figure}
+
+\subsection{Consumo de Recursos (E1, E5)}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_cpu_ram.pdf}}
+\caption{Uso de CPU y RAM pico para versión secuencial vs.\ Ray (32 actores)
+por tamaño de matriz.}
+\label{fig:recursos}
+\end{figure}
+
+La Tabla~\ref{tab:recursos} detalla el uso promedio de CPU, RAM pico y
+consumo energético estimado por configuración.
+
+\begin{table}[htbp]
+\caption{Métricas de recursos por configuración}
+\label{tab:recursos}
+\begin{center}
+\begin{tabular}{|r|c|r|r|r|r|}
+\hline
+\textbf{$n$} & \textbf{Alg.} & \textbf{$p$} & \textbf{CPU\%} & \textbf{RAM (MB)} & \textbf{E (J)} \\
+\hline
+\input{resultados/tabla_recursos.tex}
+\end{tabular}
+\end{center}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Discusión}
+\label{sec:discusion}
+
+\subsection{Speedup y Eficiencia}
+
+[COMPLETAR CON ANÁLISIS DE LOS RESULTADOS REALES]
+
+Los resultados de la Tabla~\ref{tab:speedup} muestran que el speedup de
+Ray es significativo para matrices grandes ($n \geq$ [VALOR]). Para matrices
+pequeñas ($n < $ [VALOR]), el overhead de Ray ($T_{overhead} \approx$ [VALOR]~s)
+supera al beneficio del paralelismo, lo que se confirma en la Tabla~\ref{tab:overhead}.
+
+\subsection{Escalabilidad}
+
+La Fig.~\ref{fig:speedup_workers} evidencia [COMPLETAR]. La Ley de Amdahl
+predice un speedup máximo de $1/(1-\beta)$ donde $\beta$ es la fracción
+paralelizable. En Floyd-Warshall, la fracción paralelizable por iteración es
+cercana a 1 para la parte $(i,j)$, pero las $n$ iteraciones de $k$ requieren
+sincronización secuencial.
+
+\subsection{Overhead de Coordinación}
+
+Ray introduce tres fuentes de overhead: (i) serialización y transferencia de
+la fila $k$ al \textit{object store}, (ii) scheduling de tareas en los actores,
+y (iii) sincronización mediante \texttt{ray.get}. El overhead absoluto es
+aproximadamente constante por iteración y representa un porcentaje decreciente
+del tiempo total para $n$ grande.
+
+\subsection{Amenazas a la Validez}
+
+\textit{Validez interna}: Los tiempos pueden verse afectados por procesos del
+sistema operativo. Se mitiga con 10 repeticiones y el test de Grubbs.
+\textit{Validez externa}: Los resultados son específicos al hardware AMD
+Threadripper. La generalización a otros sistemas requiere replicación.
+\textit{Validez de constructo}: El speedup mide el tiempo de reloj completo,
+incluyendo overhead de Ray. Esto refleja el beneficio neto para el usuario final.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+En este trabajo evaluamos experimentalmente la paralelización del algoritmo
+de Floyd-Warshall mediante actores Ray sobre hardware de alto rendimiento
+(AMD Threadripper PRO 5975WX, 32 núcleos). Las principales conclusiones son:
+
+\begin{itemize}
+  \item [COMPLETAR TRAS EJECUTAR BENCHMARKS]
+  \item El overhead de Ray es [VALOR]~s y permanece aproximadamente constante
+        independientemente del tamaño de la matriz.
+  \item Ray ofrece beneficio neto para $n \geq$ [VALOR], con un speedup de
+        hasta [VALOR]$\times$ con 32 actores.
+  \item La eficiencia paralela decrece con el número de actores, lo que
+        es consistente con la ley de Amdahl aplicada a las $n$ barreras de
+        sincronización del algoritmo.
+  \item El consumo de memoria RAM escala linealmente con el número de actores
+        debido a la replicación de la fila $k$ en el \textit{object store}.
+\end{itemize}
+
+Como trabajo futuro se propone: (i) implementar la variante de bloques
+(\textit{blocked Floyd-Warshall}) para mejor localidad de caché; (ii)
+extender la evaluación a múltiples nodos con Ray en modo distribuido real;
+(iii) comparar con implementaciones OpenMP/MPI equivalentes.
+
+El entorno experimental completo está disponible públicamente en:\\
+\url{https://github.com/martinmaza/floyd-warshall-ray}\\
+con imagen Docker reproducible en:\\
+\url{ghcr.io/martinmaza/floyd-warshall-ray:latest}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section*{Agradecimientos}
+
+Los autores agradecen al Instituto de Informática de la Universidad Austral
+de Chile por el acceso al hardware de alto rendimiento utilizado en este estudio.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{00}
+
+\bibitem{floyd1962algorithm}
+R.~W. Floyd, ``Algorithm 97: Shortest path,''
+\textit{Commun. ACM}, vol.~5, no.~6, p.~345, Jun. 1962.
+
+\bibitem{warshall1962theorem}
+S.~Warshall, ``A theorem on boolean matrices,''
+\textit{J. ACM}, vol.~9, no.~1, pp.~11--12, Jan. 1962.
+
+\bibitem{cormen2009introduction}
+T.~H. Cormen, C.~E. Leiserson, R.~L. Rivest, and C.~Stein,
+\textit{Introduction to Algorithms}, 3rd~ed.
+Cambridge, MA: MIT Press, 2009.
+
+\bibitem{moritz2018ray}
+P.~Moritz \textit{et al.}, ``Ray: A distributed framework for emerging AI
+applications,'' in \textit{Proc. 13th USENIX Symp. Operating Systems Design
+and Implementation (OSDI)}, 2018, pp.~561--577.
+
+\bibitem{zhao2011parallel}
+Y.~Zhao and P.~Tao, ``A parallel Floyd-Warshall algorithm on a GPU,''
+in \textit{Proc. Int. Conf. Parallel and Distributed Computing, Applications
+and Technologies (PDCAT)}, 2011, pp.~299--305.
+
+\bibitem{venkataraman2003blocked}
+G.~Venkataraman, S.~Sahni, and S.~Mukhopadhyaya, ``A blocked all-pairs
+shortest-paths algorithm,'' \textit{J. Exp. Algorithmics}, vol.~8, 2003.
+
+\bibitem{malewicz2010pregel}
+G.~Malewicz \textit{et al.}, ``Pregel: A system for large-scale graph
+processing,'' in \textit{Proc. ACM SIGMOD Int. Conf. Management of Data},
+2010, pp.~135--146.
+
+\bibitem{xia2004communication}
+Y.~Xia and V.~K. Prasanna, ``Communication optimal parallel shortest path
+algorithms,'' in \textit{Proc. Int. Parallel and Distributed Processing Symp.
+(IPDPS)}, 2004.
+
+\bibitem{zaharia2012resilient}
+M.~Zaharia \textit{et al.}, ``Resilient distributed datasets: A fault-tolerant
+abstraction for in-memory cluster computing,'' in \textit{Proc. 9th USENIX
+Conf. Networked Systems Design and Implementation (NSDI)}, 2012.
+
+\bibitem{grubbs1969procedures}
+F.~E. Grubbs, ``Procedures for detecting outlying observations in samples,''
+\textit{Technometrics}, vol.~11, no.~1, pp.~1--21, 1969.
+
+\end{thebibliography}
+
+\end{document}

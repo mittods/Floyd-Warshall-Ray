@@ -1,0 +1,191 @@
+# GitHub Actions: construcción y publicación automática en GHCR
+#
+# Este workflow:
+#   1. Se activa en push a main/develop y en creación de tags
+#   2. Construye la imagen Docker con caché entre builds
+#   3. Ejecuta validaciones básicas de la imagen
+#   4. Publica en GitHub Container Registry (GHCR)
+#
+# Tags generados automáticamente:
+#   ghcr.io/<owner>/<repo>:latest
+#   ghcr.io/<owner>/<repo>:main
+#   ghcr.io/<owner>/<repo>:v1.0.0  (cuando existe un tag)
+#   ghcr.io/<owner>/<repo>:abc1234 (hash corto del commit)
+
+name: Docker Build & Publish
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+    # En PRs solo construir, no publicar
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Publicar imagen en GHCR'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Construir y publicar imagen Docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Para firma de imágenes con cosign (opcional)
+      id-token: write
+
+    steps:
+      # ── Checkout del repositorio ──────────────────────────────────────────
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      # ── Configurar QEMU para builds multiplataforma (opcional) ────────────
+      - name: Configurar QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # ── Configurar Docker Buildx ──────────────────────────────────────────
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+
+      # ── Autenticación en GHCR ─────────────────────────────────────────────
+      - name: Iniciar sesión en GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Extraer metadatos para tags y labels ──────────────────────────────
+      - name: Extraer metadatos Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Tag 'latest' en main
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Nombre de la rama (main, develop, etc.)
+            type=ref,event=branch
+            # Tag semántico vX.Y.Z
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # Hash corto del commit (primeros 7 caracteres)
+            type=sha,prefix=,format=short
+            # Fecha de construcción ISO 8601
+            type=raw,value={{date 'YYYY-MM-DD'}}
+          labels: |
+            org.opencontainers.image.title=Floyd-Warshall con Ray
+            org.opencontainers.image.description=Entorno experimental para benchmarks HPC de Floyd-Warshall paralelo con Ray
+            org.opencontainers.image.vendor=Universidad Austral de Chile
+            maintainer=martinmaza161@gmail.com
+
+      # ── Construir y publicar ──────────────────────────────────────────────
+      - name: Construir y publicar imagen Docker
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Caché de capas entre builds (reduce tiempo de construcción >50%)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Plataformas objetivo: solo amd64 (hardware del paper)
+          platforms: linux/amd64
+          # Build args para trazabilidad
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TAG=${{ github.ref_name }}
+
+      # ── Validación de la imagen ──────────────────────────────────────────
+      - name: Validar imagen Docker
+        run: |
+          # Obtener el primer tag para la validación
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "Validando imagen: $IMAGE_TAG"
+
+          # Verificar que la imagen se puede ejecutar
+          docker run --rm "$IMAGE_TAG" python --version
+
+          # Verificar que Ray está correctamente instalado
+          docker run --rm "$IMAGE_TAG" python -c "
+          import ray
+          print(f'Ray {ray.__version__}: OK')
+          import numpy as np
+          print(f'NumPy {np.__version__}: OK')
+          import scipy
+          print(f'SciPy {scipy.__version__}: OK')
+          import pandas as pd
+          print(f'Pandas {pd.__version__}: OK')
+          import matplotlib
+          print(f'Matplotlib {matplotlib.__version__}: OK')
+          import psutil
+          print(f'psutil {psutil.__version__}: OK')
+          "
+
+          # Verificar que el código del proyecto está presente
+          docker run --rm "$IMAGE_TAG" python -c "
+          import sys
+          sys.path.insert(0, '/app')
+          from src.secuencial.floyd_warshall_secuencial import floyd_warshall_secuencial, inicializar_matriz
+          from src.ray_parallel.floyd_warshall_ray import floyd_warshall_ray
+          print('Módulos del proyecto: OK')
+          "
+
+          # Ejecutar una prueba funcional mínima
+          docker run --rm "$IMAGE_TAG" python -c "
+          import sys
+          sys.path.insert(0, '/app')
+          import numpy as np
+          from src.secuencial.floyd_warshall_secuencial import floyd_warshall_secuencial, inicializar_matriz
+
+          # Verificar correctitud con n=32
+          matriz = inicializar_matriz(32, semilla=0)
+          resultado, metricas = floyd_warshall_secuencial(matriz)
+          assert resultado.shape == (32, 32), 'Dimensión incorrecta'
+          assert np.all(np.diag(resultado) == 0), 'Diagonal no es cero'
+          print(f'Prueba funcional OK: n=32, tiempo={metricas[\"tiempo_total_s\"]:.4f}s')
+          "
+
+          echo "Validación completada exitosamente."
+
+      # ── Resumen de la publicación ─────────────────────────────────────────
+      - name: Resumen de publicación
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "## Imagen Docker publicada" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tags generados" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Uso" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "docker pull $FIRST_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "docker run --rm -v \$(pwd)/resultados:/app/resultados $FIRST_TAG python -m experimentos.ejecutar_benchmarks" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

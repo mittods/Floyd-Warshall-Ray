@@ -1,0 +1,104 @@
+# Docker Compose para el entorno experimental Floyd-Warshall con Ray
+#
+# Uso principal:
+#   docker compose run --rm benchmark make benchmark
+#   docker compose run --rm benchmark bash
+#
+# La imagen se descarga automáticamente desde GHCR.
+# Para reconstruir localmente: docker compose --profile local build
+
+services:
+  # ── Servicio principal de benchmarks ─────────────────────────────────────
+  benchmark:
+    image: ghcr.io/martinmaza/floyd-warshall-ray:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      # Solo se usa con: docker compose --profile local build
+    container_name: fw_benchmark
+
+    environment:
+      # Configuración del experimento (sobreescribir según necesidad)
+      FW_TAMANOS: "${FW_TAMANOS:-64,128,256,512,1024,2048}"
+      FW_WORKERS: "${FW_WORKERS:-1,2,4,8,16,32}"
+      FW_REPETICIONES: "${FW_REPETICIONES:-10}"
+      FW_SEMILLA: "${FW_SEMILLA:-42}"
+      FW_DENSIDAD: "${FW_DENSIDAD:-0.7}"
+      FW_INTERVALO_MONITOR: "${FW_INTERVALO_MONITOR:-0.5}"
+
+      # Recursos Ray (vacío = autodetección)
+      RAY_NUM_CPUS: "${RAY_NUM_CPUS:-}"
+      RAY_OBJECT_STORE_MEMORY: "${RAY_OBJECT_STORE_MEMORY:-}"
+
+      # Reproducibilidad: identificar la imagen exacta usada
+      DOCKER_IMAGE_TAG: "${DOCKER_IMAGE_TAG:-latest}"
+
+    volumes:
+      # Persistir resultados en el host para análisis posterior
+      - ./resultados:/app/resultados
+      - ./graficos:/app/graficos
+      - ./metricas:/app/metricas
+      # Código fuente montado para desarrollo sin reconstruir imagen
+      - ./src:/app/src:ro
+      - ./experimentos:/app/experimentos:ro
+      - ./analisis:/app/analisis:ro
+
+    # Límites de recursos (ajustar según hardware disponible)
+    # Para usar TODOS los recursos del Threadripper PRO 5975WX:
+    # Comentar 'cpus' y 'memory' para sin límites
+    deploy:
+      resources:
+        limits:
+          cpus: "64"          # 64 hilos del Threadripper PRO 5975WX
+          memory: "120g"      # 120 GB de los 128 GB disponibles
+        reservations:
+          memory: "4g"
+
+    # Acceso a IPC del host necesario para memoria compartida de Ray
+    ipc: host
+
+    # Para acceso a GPU NVIDIA TITAN V
+    # Requiere: nvidia-container-toolkit instalado en el host
+    # Descomentar para habilitar GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+    # Modo de red del host para mejor rendimiento de Ray
+    # (network_mode: host no es compatible con 'ports' en la misma definición)
+    network_mode: host
+
+    # Sin tiempo límite para experimentos largos
+    stdin_open: true
+    tty: true
+
+    # El contenedor NO ejecuta nada automáticamente
+    command: bash
+
+  # ── Servicio de análisis post-benchmark ──────────────────────────────────
+  analisis:
+    image: ghcr.io/martinmaza/floyd-warshall-ray:latest
+    container_name: fw_analisis
+    profiles:
+      - analisis
+
+    environment:
+      FW_TAMANOS: "${FW_TAMANOS:-64,128,256,512,1024,2048}"
+      FW_WORKERS: "${FW_WORKERS:-1,2,4,8,16,32}"
+
+    volumes:
+      - ./resultados:/app/resultados
+      - ./graficos:/app/graficos
+      - ./src:/app/src:ro
+      - ./analisis:/app/analisis:ro
+
+    command: >
+      bash -c "
+        python -m analisis.generar_tablas &&
+        python -m analisis.generar_graficos &&
+        echo 'Análisis completado. Resultados en ./resultados/ y ./graficos/'
+      "

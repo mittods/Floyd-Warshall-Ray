@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Resultados generados (guardados por separado o en artefactos de CI)
+resultados/*.json
+resultados/*.csv
+resultados/*.parquet
+resultados/*.tex
+resultados/metadatos_experimento.json
+
+# Gráficos generados
+graficos/*.pdf
+graficos/*.png
+
+# Métricas
+metricas/*.json
+metricas/*.csv
+
+# Datasets generados
+datasets/*.npy
+datasets/*.npz
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.log
+*.out
+*.synctex.gz
+ray.pdf
+
+# Archivos temporales de Ray
+/tmp/ray/
+ray_results/
+
+# Archivos de exportación
+*.tar.gz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+.METODOLOGIA_RAZONADA.md

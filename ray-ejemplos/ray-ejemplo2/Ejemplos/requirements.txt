@@ -1,0 +1,3 @@
+#pip install -U "ray[default]" # Con problemas de compatibilidad
+pip install "ray[default]==2.44.0" # Solucion a problemas de compatibilidad (Python 3.9)
+pip install numpy
