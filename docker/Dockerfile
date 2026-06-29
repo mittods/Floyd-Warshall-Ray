@@ -90,6 +90,7 @@ COPY --chown=investigador:investigador src/ ./src/
 COPY --chown=investigador:investigador experimentos/ ./experimentos/
 COPY --chown=investigador:investigador analisis/ ./analisis/
 COPY --chown=investigador:investigador scripts/ ./scripts/
+COPY --chown=investigador:investigador Makefile ./Makefile
 COPY --chown=investigador:investigador docker/entrypoint.sh ./entrypoint.sh
 
 # Hacer ejecutables los scripts
