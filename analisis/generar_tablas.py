@@ -160,14 +160,21 @@ def generar_tabla_recursos(df: pd.DataFrame, ruta_salida: Path) -> None:
     filas_tex = []
 
     for _, fila in df.sort_values(["n", "algoritmo", "num_actores"]).iterrows():
-        alg = "Sec." if fila["algoritmo"] == "secuencial" else "Ray"
-        w = "--" if fila["algoritmo"] == "secuencial" else str(int(fila["num_actores"]))
+        algoritmo = fila["algoritmo"]
+        alg_label = {
+            "secuencial": "CPU Sec.",
+            "ray_actores": "CPU Ray",
+            "gpu_secuencial": "GPU Sec.",
+            "gpu_ray": "GPU Ray",
+        }.get(algoritmo, algoritmo)
+        actores = fila.get("num_actores", 0)
+        w = "--" if pd.isna(actores) or actores == 0 else str(int(actores))
         cpu_pct = fila.get("cpu_uso_promedio_pct_promedio", 0)
         ram_mb = fila.get("ram_pico_mb_promedio", 0)
         energia_j = fila.get("energia_total_j_promedio", 0)
 
         linea = (
-            f"  {int(fila['n'])} & {alg} & {w}"
+            f"  {int(fila['n'])} & {alg_label} & {w}"
             f" & {cpu_pct:.1f}"
             f" & {ram_mb:.0f}"
             f" & {energia_j:.1f} \\\\"
