@@ -29,6 +29,10 @@ services:
       # Reproducibilidad: identificar la imagen exacta usada
       DOCKER_IMAGE_TAG: "${DOCKER_IMAGE_TAG:-latest}"
 
+      # GPU NVIDIA TITAN V
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+
     volumes:
       # Persistir resultados en el host para análisis posterior
       - ./resultados:/app/resultados
@@ -42,11 +46,8 @@ services:
     # Acceso a IPC del host: necesario para memoria compartida de Ray
     ipc: host
 
-    # Para acceso a GPU NVIDIA TITAN V (requiere nvidia-container-toolkit):
-    # runtime: nvidia
-    # environment:
-    #   NVIDIA_VISIBLE_DEVICES: "0"
-    #   NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # Acceso a GPU NVIDIA TITAN V (requiere nvidia-container-toolkit en el host)
+    runtime: nvidia
 
     # Red del host para mejor rendimiento de Ray
     network_mode: host

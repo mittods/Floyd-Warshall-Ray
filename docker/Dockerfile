@@ -82,7 +82,7 @@ RUN mkdir -p \
     && chmod -R 777 resultados graficos metricas datasets
 
 # Crear usuario no-root para mayor seguridad
-RUN groupadd -r investigador && useradd -r -g investigador investigador && \
+RUN groupadd -r investigador && useradd -r -m -g investigador investigador && \
     chown -R investigador:investigador /app
 
 # Copiar el código fuente del proyecto
