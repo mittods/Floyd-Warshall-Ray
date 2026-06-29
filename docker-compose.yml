@@ -44,6 +44,9 @@ services:
       - ./experimentos:/app/experimentos:ro
       - ./analisis:/app/analisis:ro
 
+    # Acceso a GPU via nvidia-container-toolkit
+    runtime: nvidia
+
     # Acceso a IPC del host: necesario para memoria compartida de Ray
     ipc: host
 

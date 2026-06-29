@@ -39,11 +39,13 @@ check "Matplotlib" "python -c 'import matplotlib'"
 check "psutil" "python -c 'import psutil'"
 check "pynvml" "python -c 'import pynvml'"
 check "pyarrow" "python -c 'import pyarrow'"
+check "CuPy (GPU)" "python -c 'import cupy; cupy.array([1])'"
 echo ""
 
 echo "── Módulos del proyecto ──────────────────────────"
 check "Módulo secuencial" "python -c 'from src.secuencial import floyd_warshall_secuencial'"
 check "Módulo Ray" "python -c 'from src.ray_parallel import floyd_warshall_ray'"
+check "Módulo GPU" "python -c 'from src.gpu import floyd_warshall_gpu, gpu_disponible'"
 check "Módulo monitor" "python -c 'from src.utils import MonitorSistema'"
 check "Módulo exportador" "python -c 'from src.utils import exportar_resultados'"
 check "Módulo experimentos" "python -c 'from experimentos import generar_escenarios'"
@@ -63,11 +65,20 @@ echo ""
 echo "── GPU ────────────────────────────────────────────"
 if command -v nvidia-smi &>/dev/null; then
     GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-    echo "  [OK] GPU detectada: $GPU"
+    echo "  [OK] nvidia-smi disponible: $GPU"
     nvidia-smi --query-gpu=memory.total,driver_version --format=csv,noheader
 else
-    echo "  [AVISO] nvidia-smi no disponible (GPU no será monitoreada)"
+    echo "  [AVISO] nvidia-smi no disponible en el contenedor"
+    echo "          (instalar nvidia-container-toolkit y agregar 'runtime: nvidia' al compose)"
 fi
+
+check "CuPy accede a GPU" "python -c \"
+import cupy as cp
+a = cp.ones((64,64), dtype=cp.float64)
+b = cp.ones((64,64), dtype=cp.float64)
+_ = cp.dot(a, b)
+cp.cuda.Stream.null.synchronize()
+\""
 echo ""
 
 echo "── Prueba funcional mínima ───────────────────────"
