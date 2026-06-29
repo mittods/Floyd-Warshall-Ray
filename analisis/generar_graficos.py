@@ -5,35 +5,32 @@ Lee los resultados agregados y genera figuras en PDF (vectorial)
 y PNG (ráster) listas para incluir en el artículo LaTeX.
 
 Gráficos generados:
-    speedup_vs_tamano.pdf        Speedup vs. n para varios workers
-    speedup_vs_workers.pdf       Speedup vs. workers (escal. fuerte)
-    tiempo_vs_tamano.pdf         Tiempo total seq vs. Ray por n
-    overhead_vs_tamano.pdf       Overhead absoluto y relativo de Ray
-    eficiencia_vs_workers.pdf    Eficiencia paralela vs. workers
-    escalabilidad_debil.pdf      Tiempo normalizado (escal. débil)
-    consumo_cpu_ram.pdf          CPU% y RAM por configuración
-    consumo_energia.pdf          Energía y potencia por configuración
+    speedup_vs_tamano.pdf        Speedup vs. n (grupo E1, w=32 actores)
+    speedup_vs_workers.pdf       Speedup vs. workers (grupos E2 y E5)
+    tiempo_vs_tamano.pdf         Tiempo total seq vs. Ray por n (E1)
+    eficiencia_vs_workers.pdf    Eficiencia paralela vs. workers (E2 y E5)
+    escalabilidad_debil.pdf      Tiempo normalizado (grupo E3)
+    consumo_cpu_ram.pdf          CPU% y RAM por configuración (E1)
+    consumo_energia.pdf          Energía por configuración (E1, E2, E5)
 """
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 import matplotlib
-matplotlib.use("Agg")  # sin GUI, para entornos headless
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from src.utils.exportador import consolidar_resultados, DIR_RESULTADOS
+from src.utils.exportador import DIR_RESULTADOS
 
 logger = logging.getLogger(__name__)
 
 DIR_GRAFICOS = Path(__file__).parents[1] / "graficos"
 
-# Estilo IEEE-compatible
 plt.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
@@ -64,96 +61,113 @@ def _guardar(fig: plt.Figure, nombre: str) -> None:
 
 
 def grafico_speedup_vs_tamano(df: pd.DataFrame) -> None:
-    """Speedup vs. tamaño de matriz n para cada cantidad de workers."""
-    df_ray = df[df["algoritmo"] == "ray_actores"].copy()
-    df_seq = df[df["algoritmo"] == "secuencial"].copy()
+    """Speedup vs. n usando solo E1 (una línea por cantidad de workers).
 
-    if df_ray.empty or df_seq.empty:
-        logger.warning("Sin datos suficientes para speedup_vs_tamano.")
+    E1 tiene exactamente un punto por (n, w=32), evitando duplicados
+    entre grupos.
+    """
+    # E1 tiene secuencial y ray_actores para todos los n con w=32
+    df_e1 = df[df["grupo"] == "E1_comparacion"].copy()
+    df_seq = df_e1[df_e1["algoritmo"] == "secuencial"].sort_values("n")
+    df_ray = df_e1[df_e1["algoritmo"] == "ray_actores"].sort_values("n")
+
+    if df_seq.empty or df_ray.empty:
+        logger.warning("Sin datos E1 para speedup_vs_tamano.")
         return
+
+    # Calcular speedup limpio desde E1
+    t_seq = df_seq.set_index("n")["tiempo_media"]
+    df_ray = df_ray.copy()
+    df_ray["speedup_e1"] = df_ray.apply(
+        lambda r: t_seq.get(r["n"], float("nan")) / r["tiempo_media"], axis=1
+    )
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
-    workers_lista = sorted(df_ray["num_actores"].unique())
-    for idx, w in enumerate(workers_lista):
-        datos_w = df_ray[df_ray["num_actores"] == w].sort_values("n")
-        speedup_col = datos_w["speedup"] if "speedup" in datos_w.columns else pd.Series(
-            [1.0] * len(datos_w), index=datos_w.index
-        )
-        ax.plot(
-            datos_w["n"],
-            speedup_col,
-            marker=MARCADORES[idx % len(MARCADORES)],
-            color=COLORES[idx % len(COLORES)],
-            label=f"{int(w)} actores",
-        )
+    w = int(df_ray["num_actores"].iloc[0])
+    ax.plot(
+        df_ray["n"], df_ray["speedup_e1"],
+        marker="o", color=COLORES[0], label=f"Ray ({w} actores)",
+    )
+    if "tiempo_ic95_radio" in df_ray.columns:
+        ic = df_ray["tiempo_ic95_radio"] / df_ray["tiempo_media"] * df_ray["speedup_e1"]
+        ax.fill_between(df_ray["n"], df_ray["speedup_e1"] - ic,
+                        df_ray["speedup_e1"] + ic, alpha=0.2, color=COLORES[0])
 
     ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=0.8, label="Sin aceleración")
     ax.set_xscale("log", base=2)
     ax.set_xlabel("Tamaño de matriz $n$")
-    ax.set_ylabel("Speedup")
-    ax.set_title("Speedup vs. tamaño de matriz")
-    ax.legend(loc="upper left", ncol=2)
+    ax.set_ylabel("Speedup $S$")
+    ax.set_title("Speedup vs. tamaño de matriz (32 actores)")
+    ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
     _guardar(fig, "speedup_vs_tamano")
 
 
 def grafico_speedup_vs_workers(df: pd.DataFrame) -> None:
-    """Escalabilidad fuerte: speedup vs. workers para un n fijo."""
-    df_ray = df[df["algoritmo"] == "ray_actores"].copy()
-    if df_ray.empty:
-        return
+    """Escalabilidad fuerte: speedup vs. workers.
 
-    tamanos = sorted(df_ray["n"].unique())
+    Usa E2 (n=1024, todos los workers) y E5 (n=2048, todos los workers).
+    Cada grupo tiene su propio baseline secuencial → sin contaminación.
+    """
+    grupos_escal = {
+        "E2_escal_fuerte": None,
+        "E5_carga_maxima": None,
+    }
+
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
-    for idx, n in enumerate(tamanos[-3:]):  # Los 3 mayores tamaños
-        datos_n = df_ray[df_ray["n"] == n].sort_values("num_actores")
-        speedup = datos_n["speedup"] if "speedup" in datos_n.columns else pd.Series(
-            [1.0] * len(datos_n), index=datos_n.index
-        )
+    for idx, grupo in enumerate(grupos_escal):
+        df_g = df[df["grupo"] == grupo].copy()
+        if df_g.empty:
+            continue
+
+        df_seq_g = df_g[df_g["algoritmo"] == "secuencial"]
+        df_ray_g = df_g[df_g["algoritmo"] == "ray_actores"].sort_values("num_actores")
+
+        if df_seq_g.empty or df_ray_g.empty:
+            continue
+
+        t_ref = df_seq_g["tiempo_media"].iloc[0]
+        n_val = int(df_ray_g["n"].iloc[0])
+        df_ray_g = df_ray_g.copy()
+        df_ray_g["speedup_limpio"] = t_ref / df_ray_g["tiempo_media"]
+
         ax.plot(
-            datos_n["num_actores"],
-            speedup,
-            marker=MARCADORES[idx],
-            color=COLORES[idx],
-            label=f"$n={n}$",
+            df_ray_g["num_actores"], df_ray_g["speedup_limpio"],
+            marker=MARCADORES[idx], color=COLORES[idx], label=f"$n={n_val}$",
         )
 
-    # Línea de speedup ideal (lineal)
-    workers_max = df_ray["num_actores"].max()
+    workers_max = df[df["algoritmo"] == "ray_actores"]["num_actores"].max()
     w_range = np.array([1, workers_max])
     ax.plot(w_range, w_range, "k--", linewidth=0.8, label="Ideal")
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log", base=2)
     ax.set_xlabel("Número de actores")
-    ax.set_ylabel("Speedup")
+    ax.set_ylabel("Speedup $S(p)$")
     ax.set_title("Escalabilidad fuerte")
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.1g}"))
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.2g}"))
     _guardar(fig, "speedup_vs_workers")
 
 
 def grafico_tiempo_vs_tamano(df: pd.DataFrame) -> None:
-    """Tiempo de ejecución total: secuencial vs. Ray."""
-    df_seq = df[df["algoritmo"] == "secuencial"].sort_values("n")
-    df_ray = df[df["algoritmo"] == "ray_actores"].copy()
+    """Tiempo de ejecución: secuencial vs. Ray (grupo E1)."""
+    df_e1 = df[df["grupo"] == "E1_comparacion"].copy()
+    df_seq = df_e1[df_e1["algoritmo"] == "secuencial"].sort_values("n")
+    df_ray = df_e1[df_e1["algoritmo"] == "ray_actores"].sort_values("n")
 
     if df_seq.empty:
         return
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
-    # Secuencial
-    ax.plot(
-        df_seq["n"],
-        df_seq["tiempo_media"],
-        marker="o", color=COLORES[0], label="Secuencial",
-    )
+    ax.plot(df_seq["n"], df_seq["tiempo_media"],
+            marker="o", color=COLORES[0], label="Secuencial")
     if "tiempo_ic95_radio" in df_seq.columns:
         ax.fill_between(
             df_seq["n"],
@@ -162,16 +176,17 @@ def grafico_tiempo_vs_tamano(df: pd.DataFrame) -> None:
             alpha=0.2, color=COLORES[0],
         )
 
-    # Ray con mayor número de workers
-    workers_max = df_ray["num_actores"].max() if not df_ray.empty else 0
-    df_ray_max = df_ray[df_ray["num_actores"] == workers_max].sort_values("n")
-    if not df_ray_max.empty:
-        ax.plot(
-            df_ray_max["n"],
-            df_ray_max["tiempo_media"],
-            marker="s", color=COLORES[1],
-            label=f"Ray ({int(workers_max)} actores)",
-        )
+    if not df_ray.empty:
+        w = int(df_ray["num_actores"].iloc[0])
+        ax.plot(df_ray["n"], df_ray["tiempo_media"],
+                marker="s", color=COLORES[1], label=f"Ray ({w} actores)")
+        if "tiempo_ic95_radio" in df_ray.columns:
+            ax.fill_between(
+                df_ray["n"],
+                df_ray["tiempo_media"] - df_ray["tiempo_ic95_radio"],
+                df_ray["tiempo_media"] + df_ray["tiempo_ic95_radio"],
+                alpha=0.2, color=COLORES[1],
+            )
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")
@@ -184,73 +199,33 @@ def grafico_tiempo_vs_tamano(df: pd.DataFrame) -> None:
     _guardar(fig, "tiempo_vs_tamano")
 
 
-def grafico_overhead(df: pd.DataFrame) -> None:
-    """Overhead absoluto y relativo de Ray en función de n."""
-    df_ray = df[df["algoritmo"] == "ray_actores"].copy()
-    if df_ray.empty or "tiempo_overhead_ray_s_promedio" not in df_ray.columns:
-        logger.warning("Sin datos de overhead. Columna 'tiempo_overhead_ray_s_promedio' no encontrada.")
-        return
-
-    workers_max = df_ray["num_actores"].max()
-    datos = df_ray[df_ray["num_actores"] == workers_max].sort_values("n")
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
-
-    # Overhead absoluto
-    ax1.bar(
-        range(len(datos)),
-        datos["tiempo_overhead_ray_s_promedio"],
-        color=COLORES[2], alpha=0.8,
-    )
-    ax1.set_xticks(range(len(datos)))
-    ax1.set_xticklabels(datos["n"].astype(int), rotation=45)
-    ax1.set_xlabel("Tamaño $n$")
-    ax1.set_ylabel("Overhead (s)")
-    ax1.set_title("Overhead absoluto de Ray")
-
-    # Overhead relativo
-    pct_overhead = (
-        datos["tiempo_overhead_ray_s_promedio"] / datos["tiempo_media"] * 100
-    )
-    ax2.bar(range(len(datos)), pct_overhead, color=COLORES[3], alpha=0.8)
-    ax2.set_xticks(range(len(datos)))
-    ax2.set_xticklabels(datos["n"].astype(int), rotation=45)
-    ax2.set_xlabel("Tamaño $n$")
-    ax2.set_ylabel("Overhead (%)")
-    ax2.set_title("Overhead relativo de Ray")
-
-    plt.tight_layout()
-    _guardar(fig, "overhead_vs_tamano")
-
-
 def grafico_eficiencia_paralela(df: pd.DataFrame) -> None:
-    """Eficiencia paralela (speedup / workers) vs. número de workers."""
-    df_ray = df[df["algoritmo"] == "ray_actores"].copy()
-    if df_ray.empty:
-        return
-
-    tamanos = sorted(df_ray["n"].unique())
+    """Eficiencia paralela vs. workers (grupos E2 y E5)."""
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
-    for idx, n in enumerate(tamanos[-3:]):
-        datos_n = df_ray[df_ray["n"] == n].sort_values("num_actores")
-        if "eficiencia_paralela" in datos_n.columns:
-            eficiencia = datos_n["eficiencia_paralela"]
-        elif "speedup" in datos_n.columns:
-            eficiencia = datos_n["speedup"] / datos_n["num_actores"]
-        else:
-            eficiencia = pd.Series([1.0 / max(1, w)] * len(datos_n), index=datos_n.index)
-        ax.plot(
-            datos_n["num_actores"], eficiencia,
-            marker=MARCADORES[idx], color=COLORES[idx], label=f"$n={n}$",
-        )
+    for idx, grupo in enumerate(["E2_escal_fuerte", "E5_carga_maxima"]):
+        df_g = df[df["grupo"] == grupo].copy()
+        df_seq_g = df_g[df_g["algoritmo"] == "secuencial"]
+        df_ray_g = df_g[df_g["algoritmo"] == "ray_actores"].sort_values("num_actores")
 
-    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=0.8, label="Eficiencia ideal")
+        if df_seq_g.empty or df_ray_g.empty:
+            continue
+
+        t_ref = df_seq_g["tiempo_media"].iloc[0]
+        n_val = int(df_ray_g["n"].iloc[0])
+        df_ray_g = df_ray_g.copy()
+        speedup = t_ref / df_ray_g["tiempo_media"]
+        eficiencia = speedup / df_ray_g["num_actores"]
+
+        ax.plot(df_ray_g["num_actores"], eficiencia,
+                marker=MARCADORES[idx], color=COLORES[idx], label=f"$n={n_val}$")
+
+    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=0.8, label="Ideal")
     ax.set_xscale("log", base=2)
     ax.set_xlabel("Número de actores")
-    ax.set_ylabel("Eficiencia paralela")
+    ax.set_ylabel("Eficiencia paralela $E(p)$")
     ax.set_title("Eficiencia paralela vs. actores")
-    ax.set_ylim(0, 1.1)
+    ax.set_ylim(bottom=0)
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
@@ -258,26 +233,26 @@ def grafico_eficiencia_paralela(df: pd.DataFrame) -> None:
 
 
 def grafico_escalabilidad_debil(df: pd.DataFrame) -> None:
-    """Escalabilidad débil: tiempo normalizado vs. workers."""
-    df_esc = df[df["grupo"] == "E3_escal_debil"] if "grupo" in df.columns else pd.DataFrame()
+    """Escalabilidad débil: tiempo normalizado vs. workers (grupo E3)."""
+    df_esc = df[df["grupo"] == "E3_escal_debil"].copy() if "grupo" in df.columns else pd.DataFrame()
     if df_esc.empty:
         logger.warning("Sin datos de escenario E3 (escalabilidad débil).")
         return
 
-    df_esc = df_esc.sort_values("num_actores")
-    t_base = df_esc[df_esc["num_actores"] == df_esc["num_actores"].min()]["tiempo_media"].values[0]
-    t_normalizado = df_esc["tiempo_media"] / t_base
+    df_esc = df_esc[df_esc["algoritmo"] == "ray_actores"].sort_values("num_actores")
+    if df_esc.empty:
+        return
+
+    t_base = df_esc["tiempo_media"].iloc[0]
+    t_norm = df_esc["tiempo_media"] / t_base
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
-    ax.plot(
-        df_esc["num_actores"], t_normalizado,
-        marker="o", color=COLORES[0], label="Ray",
-    )
+    ax.plot(df_esc["num_actores"], t_norm, marker="o", color=COLORES[0], label="Ray")
     ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=0.8, label="Ideal")
     ax.set_xscale("log", base=2)
     ax.set_xlabel("Número de actores")
     ax.set_ylabel("Tiempo normalizado")
-    ax.set_title("Escalabilidad débil")
+    ax.set_title("Escalabilidad débil ($n = 256\\sqrt{p}$)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
@@ -285,57 +260,42 @@ def grafico_escalabilidad_debil(df: pd.DataFrame) -> None:
 
 
 def grafico_recursos(df: pd.DataFrame) -> None:
-    """CPU% promedio y RAM pico para cada configuración."""
-    if "cpu_uso_promedio_pct_promedio" not in df.columns:
-        logger.warning("Sin métricas de recursos en los resultados.")
+    """CPU% promedio y RAM pico (grupo E1)."""
+    df_e1 = df[df["grupo"] == "E1_comparacion"].copy()
+    df_seq = df_e1[df_e1["algoritmo"] == "secuencial"].sort_values("n")
+    df_ray = df_e1[df_e1["algoritmo"] == "ray_actores"].sort_values("n")
+
+    if df_seq.empty or "cpu_uso_promedio_pct_promedio" not in df_seq.columns:
+        logger.warning("Sin métricas de recursos en E1.")
         return
 
-    tamanos = sorted(df["n"].unique())
-    df_seq = df[df["algoritmo"] == "secuencial"].sort_values("n")
-    df_ray = df[df["algoritmo"] == "ray_actores"].copy()
-    workers_max = df_ray["num_actores"].max() if not df_ray.empty else 0
-    df_ray_max = df_ray[df_ray["num_actores"] == workers_max].sort_values("n")
+    tamanos = sorted(df_seq["n"].unique())
+    x = np.arange(len(tamanos))
+    width = 0.35
+    w_label = int(df_ray["num_actores"].iloc[0]) if not df_ray.empty else "?"
+
+    def _val(subdf, n, col):
+        row = subdf[subdf["n"] == n]
+        return float(row[col].iloc[0]) if not row.empty else 0.0
+
+    cpu_seq = [_val(df_seq, n, "cpu_uso_promedio_pct_promedio") for n in tamanos]
+    cpu_ray = [_val(df_ray, n, "cpu_uso_promedio_pct_promedio") for n in tamanos]
+    ram_seq = [_val(df_seq, n, "ram_pico_mb_promedio") for n in tamanos]
+    ram_ray = [_val(df_ray, n, "ram_pico_mb_promedio") for n in tamanos]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
 
-    x = np.arange(len(tamanos))
-    width = 0.35
-
-    # CPU%
-    cpu_seq = [
-        df_seq[df_seq["n"] == n]["cpu_uso_promedio_pct_promedio"].values[0]
-        if not df_seq[df_seq["n"] == n].empty else 0
-        for n in tamanos
-    ]
-    cpu_ray = [
-        df_ray_max[df_ray_max["n"] == n]["cpu_uso_promedio_pct_promedio"].values[0]
-        if not df_ray_max[df_ray_max["n"] == n].empty else 0
-        for n in tamanos
-    ]
-
     ax1.bar(x - width/2, cpu_seq, width, label="Secuencial", color=COLORES[0])
-    ax1.bar(x + width/2, cpu_ray, width, label=f"Ray ({int(workers_max)}w)", color=COLORES[1])
+    ax1.bar(x + width/2, cpu_ray, width, label=f"Ray ({w_label}w)", color=COLORES[1])
     ax1.set_xticks(x)
     ax1.set_xticklabels(tamanos, rotation=45)
     ax1.set_xlabel("Tamaño $n$")
-    ax1.set_ylabel("Uso CPU promedio (%)")
+    ax1.set_ylabel("CPU promedio (%)")
     ax1.set_title("Utilización de CPU")
     ax1.legend()
 
-    # RAM
-    ram_seq = [
-        df_seq[df_seq["n"] == n]["ram_pico_mb_promedio"].values[0]
-        if not df_seq[df_seq["n"] == n].empty else 0
-        for n in tamanos
-    ]
-    ram_ray = [
-        df_ray_max[df_ray_max["n"] == n]["ram_pico_mb_promedio"].values[0]
-        if not df_ray_max[df_ray_max["n"] == n].empty else 0
-        for n in tamanos
-    ]
-
     ax2.bar(x - width/2, ram_seq, width, label="Secuencial", color=COLORES[0])
-    ax2.bar(x + width/2, ram_ray, width, label=f"Ray ({int(workers_max)}w)", color=COLORES[1])
+    ax2.bar(x + width/2, ram_ray, width, label=f"Ray ({w_label}w)", color=COLORES[1])
     ax2.set_xticks(x)
     ax2.set_xticklabels(tamanos, rotation=45)
     ax2.set_xlabel("Tamaño $n$")
@@ -345,6 +305,68 @@ def grafico_recursos(df: pd.DataFrame) -> None:
 
     plt.tight_layout()
     _guardar(fig, "consumo_cpu_ram")
+
+
+def grafico_energia(df: pd.DataFrame) -> None:
+    """Energía total consumida (J) por configuración.
+
+    Paneles:
+      Izq: energía vs n para seq y Ray-32w (grupo E1)
+      Der: energía vs workers para n=2048 (grupo E5)
+    """
+    df_e1 = df[df["grupo"] == "E1_comparacion"].copy()
+    df_e5 = df[df["grupo"] == "E5_carga_maxima"].copy()
+
+    col = "energia_total_j_promedio"
+    if col not in df.columns:
+        logger.warning("Columna '%s' no encontrada.", col)
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
+
+    # Panel izquierdo: energía vs n (E1)
+    df_seq_e1 = df_e1[df_e1["algoritmo"] == "secuencial"].sort_values("n")
+    df_ray_e1 = df_e1[df_e1["algoritmo"] == "ray_actores"].sort_values("n")
+
+    if not df_seq_e1.empty:
+        ax1.plot(df_seq_e1["n"], df_seq_e1[col],
+                 marker="o", color=COLORES[0], label="Secuencial")
+    if not df_ray_e1.empty:
+        w = int(df_ray_e1["num_actores"].iloc[0])
+        ax1.plot(df_ray_e1["n"], df_ray_e1[col],
+                 marker="s", color=COLORES[1], label=f"Ray ({w}w)")
+
+    ax1.set_xscale("log", base=2)
+    ax1.set_yscale("log")
+    ax1.set_xlabel("Tamaño $n$")
+    ax1.set_ylabel("Energía (J)")
+    ax1.set_title("Energía vs. tamaño de matriz")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
+
+    # Panel derecho: energía vs workers para n=2048 (E5)
+    df_seq_e5 = df_e5[df_e5["algoritmo"] == "secuencial"]
+    df_ray_e5 = df_e5[df_e5["algoritmo"] == "ray_actores"].sort_values("num_actores")
+
+    if not df_ray_e5.empty:
+        ax2.plot(df_ray_e5["num_actores"], df_ray_e5[col],
+                 marker="o", color=COLORES[1], label="Ray ($n=2048$)")
+        if not df_seq_e5.empty:
+            e_seq = float(df_seq_e5[col].iloc[0])
+            ax2.axhline(y=e_seq, color=COLORES[0], linestyle="--",
+                        linewidth=0.9, label=f"Secuencial ({e_seq:.0f} J)")
+
+    ax2.set_xscale("log", base=2)
+    ax2.set_xlabel("Número de actores")
+    ax2.set_ylabel("Energía (J)")
+    ax2.set_title("Energía vs. actores ($n=2048$)")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
+
+    plt.tight_layout()
+    _guardar(fig, "consumo_energia")
 
 
 def main() -> None:
@@ -374,10 +396,10 @@ def main() -> None:
     grafico_speedup_vs_tamano(df_agg)
     grafico_speedup_vs_workers(df_agg)
     grafico_tiempo_vs_tamano(df_agg)
-    grafico_overhead(df_agg)
     grafico_eficiencia_paralela(df_agg)
     grafico_escalabilidad_debil(df_agg)
     grafico_recursos(df_agg)
+    grafico_energia(df_agg)
 
     logger.info("Todos los gráficos generados en %s", DIR_GRAFICOS)
 
