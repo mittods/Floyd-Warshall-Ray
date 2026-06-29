@@ -196,22 +196,30 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    directorio = DIR_RESULTADOS
-    df = consolidar_resultados(directorio)
-
-    if df.empty:
+    # Leer solo el archivo de resultados agregados (uno por escenario,
+    # no los raw individuales que contaminarían el DataFrame)
+    archivo_agregado = DIR_RESULTADOS / "resultados_agregados.json"
+    if not archivo_agregado.exists():
         logger.error(
-            "No hay resultados en %s. Ejecute primero make benchmark.", directorio
+            "No se encontró %s. Ejecute primero make benchmark.", archivo_agregado
         )
         sys.exit(1)
 
-    # Filtrar solo resultados agregados (no raw individuales)
-    if "tiempo_media" not in df.columns:
+    df = pd.read_json(archivo_agregado)
+
+    if df.empty or "tiempo_media" not in df.columns:
         logger.error(
-            "Los resultados no tienen estadísticas agregadas. "
-            "Use resultados_agregados.json."
+            "El archivo de resultados no tiene estadísticas agregadas. "
+            "Verifique que el benchmark completó al menos un escenario."
         )
         sys.exit(1)
+
+    # Filtrar solo filas con datos válidos y normalizar NaN en recursos
+    df = df[df["tiempo_media"].notna()].copy()
+    for col in ["cpu_uso_promedio_pct_promedio", "ram_pico_mb_promedio",
+                "gpu_uso_pct_promedio", "energia_total_j_promedio"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0.0)
 
     DIR_RESULTADOS_TEX.mkdir(exist_ok=True)
 

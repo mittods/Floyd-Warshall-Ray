@@ -353,17 +353,21 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    df = consolidar_resultados(DIR_RESULTADOS)
-    if df.empty:
-        logger.error("No hay resultados. Ejecute primero make benchmark.")
+    archivo_agregado = DIR_RESULTADOS / "resultados_agregados.json"
+    if not archivo_agregado.exists():
+        logger.error("No se encontró %s. Ejecute primero make benchmark.", archivo_agregado)
         sys.exit(1)
 
-    # Si hay resultados raw y agregados mezclados, filtrar por existencia de tiempo_media
-    if "tiempo_media" in df.columns:
-        df_agg = df[df["tiempo_media"].notna()].copy()
-    else:
-        logger.error("Columna 'tiempo_media' no encontrada. Use resultados_agregados.csv.")
+    df = pd.read_json(archivo_agregado)
+    if df.empty or "tiempo_media" not in df.columns:
+        logger.error("El archivo de resultados no tiene estadísticas agregadas.")
         sys.exit(1)
+
+    df_agg = df[df["tiempo_media"].notna()].copy()
+    for col in ["cpu_uso_promedio_pct_promedio", "ram_pico_mb_promedio",
+                "gpu_uso_pct_promedio", "energia_total_j_promedio"]:
+        if col in df_agg.columns:
+            df_agg[col] = df_agg[col].fillna(0.0)
 
     DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
 
