@@ -46,9 +46,6 @@ services:
     # Acceso a IPC del host: necesario para memoria compartida de Ray
     ipc: host
 
-    # Acceso a GPU NVIDIA TITAN V (requiere nvidia-container-toolkit en el host)
-    runtime: nvidia
-
     # Red del host para mejor rendimiento de Ray
     network_mode: host
 
