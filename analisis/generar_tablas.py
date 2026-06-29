@@ -159,7 +159,10 @@ def generar_tabla_recursos(df: pd.DataFrame, ruta_salida: Path) -> None:
     """
     filas_tex = []
 
-    for _, fila in df.sort_values(["n", "algoritmo", "num_actores"]).iterrows():
+    df_valido = df.dropna(subset=["n", "algoritmo"]).copy()
+    df_valido["num_actores"] = df_valido["num_actores"].fillna(0)
+
+    for _, fila in df_valido.sort_values(["n", "algoritmo", "num_actores"]).iterrows():
         algoritmo = fila["algoritmo"]
         alg_label = {
             "secuencial": "CPU Sec.",
