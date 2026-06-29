@@ -1,12 +1,8 @@
 # Docker Compose para el entorno experimental Floyd-Warshall con Ray
 #
-# Compatible con docker-compose v1 (binario separado) y v2 (plugin Docker)
-#
 # Uso principal:
 #   docker-compose run --rm benchmark make benchmark
 #   docker-compose run --rm benchmark bash
-
-version: "3.8"
 
 services:
   # ── Servicio principal de benchmarks ─────────────────────────────────────
@@ -42,12 +38,6 @@ services:
       - ./src:/app/src:ro
       - ./experimentos:/app/experimentos:ro
       - ./analisis:/app/analisis:ro
-
-    # Límites de recursos — sintaxis docker-compose v1 compatible
-    # Comentar para usar todos los recursos del Threadripper PRO 5975WX sin restricción
-    cpus: "64"          # 64 hilos disponibles
-    mem_limit: "120g"   # 120 GB de los 128 GB disponibles
-    mem_reservation: "4g"
 
     # Acceso a IPC del host: necesario para memoria compartida de Ray
     ipc: host
