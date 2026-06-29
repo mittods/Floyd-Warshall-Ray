@@ -1,11 +1,12 @@
 # Docker Compose para el entorno experimental Floyd-Warshall con Ray
 #
-# Uso principal:
-#   docker compose run --rm benchmark make benchmark
-#   docker compose run --rm benchmark bash
+# Compatible con docker-compose v1 (binario separado) y v2 (plugin Docker)
 #
-# La imagen se descarga automáticamente desde GHCR.
-# Para reconstruir localmente: docker compose --profile local build
+# Uso principal:
+#   docker-compose run --rm benchmark make benchmark
+#   docker-compose run --rm benchmark bash
+
+version: "3.8"
 
 services:
   # ── Servicio principal de benchmarks ─────────────────────────────────────
@@ -14,7 +15,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      # Solo se usa con: docker compose --profile local build
     container_name: fw_benchmark
 
     environment:
@@ -43,33 +43,22 @@ services:
       - ./experimentos:/app/experimentos:ro
       - ./analisis:/app/analisis:ro
 
-    # Límites de recursos (ajustar según hardware disponible)
-    # Para usar TODOS los recursos del Threadripper PRO 5975WX:
-    # Comentar 'cpus' y 'memory' para sin límites
-    deploy:
-      resources:
-        limits:
-          cpus: "64"          # 64 hilos del Threadripper PRO 5975WX
-          memory: "120g"      # 120 GB de los 128 GB disponibles
-        reservations:
-          memory: "4g"
+    # Límites de recursos — sintaxis docker-compose v1 compatible
+    # Comentar para usar todos los recursos del Threadripper PRO 5975WX sin restricción
+    cpus: "64"          # 64 hilos disponibles
+    mem_limit: "120g"   # 120 GB de los 128 GB disponibles
+    mem_reservation: "4g"
 
-    # Acceso a IPC del host necesario para memoria compartida de Ray
+    # Acceso a IPC del host: necesario para memoria compartida de Ray
     ipc: host
 
-    # Para acceso a GPU NVIDIA TITAN V
-    # Requiere: nvidia-container-toolkit instalado en el host
-    # Descomentar para habilitar GPU:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # Para acceso a GPU NVIDIA TITAN V (requiere nvidia-container-toolkit):
+    # runtime: nvidia
+    # environment:
+    #   NVIDIA_VISIBLE_DEVICES: "0"
+    #   NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
-    # Modo de red del host para mejor rendimiento de Ray
-    # (network_mode: host no es compatible con 'ports' en la misma definición)
+    # Red del host para mejor rendimiento de Ray
     network_mode: host
 
     # Sin tiempo límite para experimentos largos
@@ -83,8 +72,6 @@ services:
   analisis:
     image: ghcr.io/martinmaza/floyd-warshall-ray:latest
     container_name: fw_analisis
-    profiles:
-      - analisis
 
     environment:
       FW_TAMANOS: "${FW_TAMANOS:-64,128,256,512,1024,2048}"

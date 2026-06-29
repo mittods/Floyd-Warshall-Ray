@@ -39,10 +39,10 @@ cd floyd-warshall-ray
 docker pull ghcr.io/martinmaza/floyd-warshall-ray:latest
 
 # 3. Ejecutar benchmarks completos
-docker compose run --rm benchmark make benchmark
+docker-compose run --rm benchmark make benchmark
 
 # 4. Generar tablas y gráficos
-docker compose run --rm benchmark make analisis
+docker-compose run --rm benchmark make analisis
 ```
 
 ### Sin Docker

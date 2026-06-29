@@ -45,7 +45,7 @@ artículo, desde cero, en cualquier sistema con el hardware especificado.
 | Software | Versión mínima | Notas |
 |---|---|---|
 | Docker | 24.x | Para reproducción con contenedor |
-| Docker Compose | 2.x | Incluido en Docker Desktop |
+| docker-compose | 1.28+ | Binario separado (`docker-compose`) o plugin v2 |
 | Python | 3.10 | Solo si no usa Docker |
 | Git | 2.x | Para clonar el repositorio |
 | nvidia-container-toolkit | Opcional | Solo si usa GPU |
@@ -94,7 +94,7 @@ cd floyd-warshall-ray
 
 ```bash
 # Ejecutar todo el pipeline experimental
-docker compose run --rm benchmark make benchmark
+docker-compose run --rm benchmark make benchmark
 
 # O equivalentemente con docker run:
 docker run --rm \
@@ -109,7 +109,7 @@ docker run --rm \
 
 ```bash
 docker pull ghcr.io/martinmaza/floyd-warshall-ray:latest
-docker compose run --rm benchmark make benchmark
+docker-compose run --rm benchmark make benchmark
 ```
 
 ### 2.6 Reconstruir la imagen localmente (si es necesario)
@@ -395,7 +395,7 @@ sudo chmod a+r /sys/class/powercap/*/energy_uj
 sudo apt-get install texlive-latex-extra latexmk
 
 # Con Docker (ya incluido en la imagen):
-docker compose run --rm benchmark make latex
+docker-compose run --rm benchmark make latex
 ```
 
 ### Error: `docker: Cannot connect to the Docker daemon`

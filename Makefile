@@ -83,12 +83,12 @@ docker-pull:
 .PHONY: docker-shell
 docker-shell:
 	@echo "$(BOLD)Iniciando shell interactivo en Docker...$(RESET)"
-	docker compose run --rm benchmark bash
+	docker-compose run --rm benchmark bash
 
 .PHONY: docker-benchmark
 docker-benchmark:
 	@echo "$(BOLD)Ejecutando benchmarks en Docker...$(RESET)"
-	docker compose run --rm benchmark make benchmark
+	docker-compose run --rm benchmark make benchmark
 
 # ── Ejecución de benchmarks ──────────────────────────────────────────────────
 .PHONY: benchmark
