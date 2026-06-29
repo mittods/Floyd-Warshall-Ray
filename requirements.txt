@@ -6,7 +6,7 @@ pandas>=2.2.0
 
 # GPU (CUDA 12.x — compatible con driver NVIDIA 580.x / CUDA 13.0)
 # Requiere contenedor con acceso a GPU (nvidia-container-toolkit en el host)
-cupy-cuda12x>=13.0.0
+cupy-cuda12x[ctk]>=13.0.0
 
 # Visualización
 matplotlib>=3.8.0
