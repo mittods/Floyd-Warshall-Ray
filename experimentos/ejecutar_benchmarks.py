@@ -312,38 +312,42 @@ def main() -> None:
                 directorio=config.dir_resultados,
             )
 
-            # Agregar y guardar
+            # Agregar, calcular speedup parcial y guardar inmediatamente
             agregado = agregar_repeticiones(registros)
             todos_agregados.append(agregado)
+
+            # Recalcular speedup sobre todos los agregados acumulados hasta ahora
+            # para que el archivo incremental tenga speedup correcto si ya existe el seq
+            calcular_speedup(todos_agregados)
+
+            # Volcado incremental: sobreescribe el consolidado tras cada escenario
+            exportar_resultados(
+                todos_agregados,
+                nombre_archivo="resultados_agregados",
+                formato="json",
+                directorio=config.dir_resultados,
+            )
+            exportar_resultados(
+                todos_agregados,
+                nombre_archivo="resultados_agregados",
+                formato="csv",
+                directorio=config.dir_resultados,
+            )
+            exportar_resultados(
+                todos_registros,
+                nombre_archivo="resultados_raw_completos",
+                formato="json",
+                directorio=config.dir_resultados,
+            )
 
         except Exception as e:
             logger.error("Error en escenario %s: %s", escenario.id, e, exc_info=True)
 
-    # Calcular speedup global
-    todos_agregados = calcular_speedup(todos_agregados)
-
-    # Exportar resultados consolidados
+    # Volcado final con CSV completo (ya está actualizado, pero lo reescribimos
+    # para garantizar que el CSV refleja exactamente el JSON final)
     exportar_resultados(
         todos_registros,
         nombre_archivo="resultados_raw_completos",
-        formato="json",
-        directorio=config.dir_resultados,
-    )
-    exportar_resultados(
-        todos_registros,
-        nombre_archivo="resultados_raw_completos",
-        formato="csv",
-        directorio=config.dir_resultados,
-    )
-    exportar_resultados(
-        todos_agregados,
-        nombre_archivo="resultados_agregados",
-        formato="json",
-        directorio=config.dir_resultados,
-    )
-    exportar_resultados(
-        todos_agregados,
-        nombre_archivo="resultados_agregados",
         formato="csv",
         directorio=config.dir_resultados,
     )
