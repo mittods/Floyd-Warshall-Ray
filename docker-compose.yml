@@ -29,8 +29,9 @@ services:
       # Reproducibilidad: identificar la imagen exacta usada
       DOCKER_IMAGE_TAG: "${DOCKER_IMAGE_TAG:-latest}"
 
-      # GPU NVIDIA TITAN V
-      NVIDIA_VISIBLE_DEVICES: "all"
+      # GPU NVIDIA TITAN V — activa solo si nvidia-container-toolkit está instalado
+      # Si no hay GPU, el benchmark omite automáticamente los escenarios E_GPU
+      NVIDIA_VISIBLE_DEVICES: "${NVIDIA_VISIBLE_DEVICES:-all}"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
 
     volumes:

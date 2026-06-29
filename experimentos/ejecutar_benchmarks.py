@@ -32,6 +32,8 @@ from src.secuencial.floyd_warshall_secuencial import (
     inicializar_matriz,
 )
 from src.ray_parallel.floyd_warshall_ray import floyd_warshall_ray
+from src.gpu.floyd_warshall_gpu import floyd_warshall_gpu, gpu_disponible
+from src.gpu.floyd_warshall_gpu_ray import floyd_warshall_gpu_ray
 from src.utils.metricas import (
     MetricasEjecucion,
     calcular_estadisticas,
@@ -98,7 +100,14 @@ def ejecutar_escenario(
                 resultado, metricas_alg = floyd_warshall_ray(
                     matriz,
                     num_actores=escenario.num_actores,
-                    inicializar=False,  # Ray ya inicializado en main
+                    inicializar=False,
+                )
+            elif escenario.algoritmo == "gpu_secuencial":
+                resultado, metricas_alg = floyd_warshall_gpu(matriz)
+            elif escenario.algoritmo == "gpu_ray":
+                resultado, metricas_alg = floyd_warshall_gpu_ray(
+                    matriz,
+                    inicializar=False,
                 )
             else:
                 raise ValueError(f"Algoritmo desconocido: {escenario.algoritmo}")
@@ -278,12 +287,27 @@ def main() -> None:
             print(f"  {e.id}: {e.descripcion} [{e.num_repeticiones} reps]")
         return
 
-    # Inicializar Ray una sola vez
+    # Verificar disponibilidad de GPU
+    hay_gpu = gpu_disponible()
+    if hay_gpu:
+        logger.info("GPU detectada: escenarios E_GPU habilitados.")
+    else:
+        logger.warning(
+            "GPU no disponible. Los escenarios E_GPU serán omitidos. "
+            "Verifique que el contenedor tiene acceso a GPU (runtime: nvidia)."
+        )
+        escenarios = [e for e in escenarios if e.grupo != "E_GPU"]
+
+    # Inicializar Ray con GPU si está disponible
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        ray.init(
+            ignore_reinit_error=True,
+            num_gpus=1 if hay_gpu else 0,
+        )
         logger.info(
-            "Ray inicializado: %d CPUs disponibles",
+            "Ray inicializado: %d CPUs, %d GPUs disponibles",
             int(ray.cluster_resources().get("CPU", 0)),
+            int(ray.cluster_resources().get("GPU", 0)),
         )
 
     # Ejecutar todos los escenarios

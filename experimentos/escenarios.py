@@ -19,6 +19,10 @@ responder las siguientes preguntas de investigación:
 
     E5: Carga máxima: mayor tamaño soportado en el hardware disponible.
         → Responde: ¿Cuál es el límite de escalabilidad del sistema?
+
+    E_GPU: Comparación CPU vs GPU (secuencial y con Ray) para cada tamaño.
+        → Responde: ¿Cuánto acelera la GPU respecto a CPU? ¿Añade Ray
+          valor sobre una GPU ya masivamente paralela, o introduce overhead?
 """
 import math
 from dataclasses import dataclass
@@ -142,6 +146,30 @@ def generar_escenarios(
             algoritmo="ray_actores",
             num_actores=w,
             num_repeticiones=max(3, config.num_repeticiones // 2),
+        ))
+
+    # ── E_GPU: Comparación CPU vs GPU ────────────────────────────────────────
+    # Se ejecuta solo si la GPU está disponible (verificado en tiempo de ejecución).
+    # Incluye las 4 variantes para cada tamaño: cpu_seq, cpu_ray, gpu_seq, gpu_ray.
+    workers_optimo = max(config.workers_ray)
+    for n in config.tamanos_matriz:
+        escenarios.append(Escenario(
+            id=f"EGPU_gpu_seq_n{n}",
+            grupo="E_GPU",
+            descripcion=f"GPU secuencial (CuPy): n={n}",
+            n=n,
+            algoritmo="gpu_secuencial",
+            num_actores=0,
+            num_repeticiones=config.num_repeticiones,
+        ))
+        escenarios.append(Escenario(
+            id=f"EGPU_gpu_ray_n{n}",
+            grupo="E_GPU",
+            descripcion=f"GPU+Ray (CuPy+actor): n={n}",
+            n=n,
+            algoritmo="gpu_ray",
+            num_actores=1,
+            num_repeticiones=config.num_repeticiones,
         ))
 
     return escenarios
