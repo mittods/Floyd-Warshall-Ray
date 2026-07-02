@@ -105,8 +105,16 @@ class FilasActor:
 def _crear_actores(
     dist: np.ndarray,
     num_actores: int,
+    cpus_por_actor: float,
 ) -> list:
-    """Particiona la matriz y crea los actores Ray."""
+    """
+    Particiona la matriz y crea los actores Ray con recursos declarados.
+
+    Cada actor reserva cpus_por_actor CPUs en el scheduler de Ray, simulando
+    un nodo computacional dedicado. Con total_cpus / num_actores CPUs por actor,
+    Ray garantiza que exactamente num_actores actores corran en paralelo,
+    sin sobrecomprometer los cores físicos disponibles.
+    """
     n = dist.shape[0]
     tamano_bloque = max(1, n // num_actores)
     actores = []
@@ -114,7 +122,7 @@ def _crear_actores(
     for inicio in range(0, n, tamano_bloque):
         fin = min(inicio + tamano_bloque, n)
         bloque = dist[inicio:fin, :].copy()
-        actor = FilasActor.remote(bloque, inicio)
+        actor = FilasActor.options(num_cpus=cpus_por_actor).remote(bloque, inicio)
         actores.append((actor, inicio, fin))
 
     return actores
@@ -123,17 +131,19 @@ def _crear_actores(
 def floyd_warshall_ray(
     distancias: np.ndarray,
     num_actores: int = 4,
-    num_cpus_por_actor: float = 1.0,
     inicializar: bool = True,
 ) -> Tuple[np.ndarray, dict]:
     """
     Ejecuta Floyd-Warshall paralelizado con actores Ray.
 
+    Cada actor declara total_cpus / num_actores CPUs ante el scheduler de Ray,
+    simulando nodos computacionales dedicados. Con 32 cores y 8 actores, cada
+    actor reserva 4 cores — Ray garantiza que exactamente 8 actores corran en
+    paralelo sin sobrecomprometer los recursos físicos disponibles.
+
     Args:
         distancias: Matriz de adyacencia de float64, tamaño n×n.
-        num_actores: Número de actores Ray (= particiones de la matriz).
-                     Recomendado: número de núcleos físicos disponibles.
-        num_cpus_por_actor: Recursos CPU declarados por actor a Ray.
+        num_actores: Número de actores Ray (nodos simulados).
         inicializar: Si True, inicializa Ray si no está activo.
 
     Returns:
@@ -152,9 +162,20 @@ def floyd_warshall_ray(
             num_actores_efectivos, n,
         )
 
+    # Calcular CPUs por actor: total_cpus / num_actores simula nodos dedicados.
+    # Cada actor declara su cuota de recursos para que Ray no sobrecomprometa
+    # los cores físicos. Con 32 cores y 8 actores → 4 CPUs/actor.
+    total_cpus = ray.cluster_resources().get("CPU", float(num_actores_efectivos))
+    cpus_por_actor = max(1.0, total_cpus / num_actores_efectivos)
+
+    logger.info(
+        "Recursos por actor: %.1f CPUs (total=%.0f, actores=%d)",
+        cpus_por_actor, total_cpus, num_actores_efectivos,
+    )
+
     # Crear actores con la matriz particionada
     t_setup_inicio = time.perf_counter()
-    actores_info = _crear_actores(distancias, num_actores_efectivos)
+    actores_info = _crear_actores(distancias, num_actores_efectivos, cpus_por_actor)
     actores = [info[0] for info in actores_info]
     t_setup = time.perf_counter() - t_setup_inicio
 
@@ -201,6 +222,7 @@ def floyd_warshall_ray(
         "algoritmo": "ray_actores",
         "n": n,
         "num_actores": num_actores_efectivos,
+        "cpus_por_actor": float(cpus_por_actor),
         "tiempo_total_s": float(t_total),
         "tiempo_calculo_s": float(t_calculo),
         "tiempo_setup_s": float(t_setup),

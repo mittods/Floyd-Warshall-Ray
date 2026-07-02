@@ -34,6 +34,9 @@ from src.secuencial.floyd_warshall_secuencial import (
 from src.ray_parallel.floyd_warshall_ray import floyd_warshall_ray
 from src.gpu.floyd_warshall_gpu import floyd_warshall_gpu, gpu_disponible
 from src.gpu.floyd_warshall_gpu_ray import floyd_warshall_gpu_ray
+from src.gpu.floyd_warshall_gpu_blocked import floyd_warshall_gpu_blocked
+from src.gpu.floyd_warshall_gpu_ray_multi import floyd_warshall_gpu_ray_multi
+from src.gpu.floyd_warshall_gpu_blocked_multi import floyd_warshall_gpu_blocked_multi
 from src.utils.metricas import (
     MetricasEjecucion,
     calcular_estadisticas,
@@ -107,6 +110,20 @@ def ejecutar_escenario(
             elif escenario.algoritmo == "gpu_ray":
                 resultado, metricas_alg = floyd_warshall_gpu_ray(
                     matriz,
+                    inicializar=False,
+                )
+            elif escenario.algoritmo == "gpu_blocked":
+                resultado, metricas_alg = floyd_warshall_gpu_blocked(matriz)
+            elif escenario.algoritmo == "gpu_ray_multi":
+                resultado, metricas_alg = floyd_warshall_gpu_ray_multi(
+                    matriz,
+                    num_actores=escenario.num_actores,
+                    inicializar=False,
+                )
+            elif escenario.algoritmo == "gpu_blocked_multi":
+                resultado, metricas_alg = floyd_warshall_gpu_blocked_multi(
+                    matriz,
+                    num_actores=escenario.num_actores,
                     inicializar=False,
                 )
             else:
@@ -207,18 +224,26 @@ def calcular_speedup(
     for r in resultados_agregados:
         n = r["n"]
         t_ray = r.get("tiempo_media", 0)
-        t_seq = tiempos_seq.get(n, 0)
+        t_seq = tiempos_seq.get(n)
 
-        if t_ray > 0 and t_seq > 0:
+        if r["algoritmo"] == "secuencial":
+            r["speedup"] = 1.0
+            r["eficiencia_paralela"] = 1.0
+            continue
+
+        if t_ray > 0 and t_seq:
             r["speedup"] = t_seq / t_ray
         else:
-            r["speedup"] = 1.0
+            # Sin baseline secuencial para este n (p. ej. tamaños de
+            # escalabilidad débil que no coinciden con ningún n de E1):
+            # no inventar un valor, dejar explícito que no es calculable.
+            r["speedup"] = None
 
         num_actores = r.get("num_actores", 0)
-        if num_actores > 0 and r["speedup"] > 0:
+        if num_actores > 0 and r["speedup"] is not None:
             r["eficiencia_paralela"] = r["speedup"] / num_actores
         else:
-            r["eficiencia_paralela"] = 1.0
+            r["eficiencia_paralela"] = None
 
     return resultados_agregados
 
@@ -296,19 +321,28 @@ def main() -> None:
             "GPU no disponible. Los escenarios E_GPU serán omitidos. "
             "Verifique que el contenedor tiene acceso a GPU (runtime: nvidia)."
         )
-        escenarios = [e for e in escenarios if e.grupo != "E_GPU"]
+        escenarios = [
+            e for e in escenarios
+            if e.grupo not in ("E_GPU", "E_GPU_blocked", "E_GPU_multi", "E_GPU_blocked_multi")
+        ]
 
-    # Inicializar Ray con GPU si está disponible
+    # Inicializar Ray. Con address= se conecta al cluster externo (Patagon multi-nodo).
+    # Sin address, Ray auto-detecta GPUs disponibles vía CUDA_VISIBLE_DEVICES.
     if not ray.is_initialized():
+        ray_address = None  # override con RAY_ADDRESS env var si se define
         ray.init(
+            address=ray_address,
             ignore_reinit_error=True,
-            num_gpus=1 if hay_gpu else 0,
         )
+        gpus_ray = int(ray.cluster_resources().get("GPU", 0))
+        cpus_ray = int(ray.cluster_resources().get("CPU", 0))
         logger.info(
-            "Ray inicializado: %d CPUs, %d GPUs disponibles",
-            int(ray.cluster_resources().get("CPU", 0)),
-            int(ray.cluster_resources().get("GPU", 0)),
+            "Ray inicializado: %d CPUs, %d GPUs disponibles en el cluster",
+            cpus_ray, gpus_ray,
         )
+        if not hay_gpu and gpus_ray > 0:
+            # CUDA disponible en el cluster aunque no en el proceso local
+            hay_gpu = True
 
     # Ejecutar todos los escenarios
     todos_registros: list = []

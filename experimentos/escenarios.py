@@ -23,6 +23,22 @@ responder las siguientes preguntas de investigación:
     E_GPU: Comparación CPU vs GPU (secuencial y con Ray) para cada tamaño.
         → Responde: ¿Cuánto acelera la GPU respecto a CPU? ¿Añade Ray
           valor sobre una GPU ya masivamente paralela, o introduce overhead?
+
+    E_GPU_blocked: GPU bloqueado (CuPy RawKernel, tres fases por tile).
+        → Responde: ¿Cuánto mejora la localidad de datos (shared memory)
+          frente al kernel naïve? ¿Cuál es el umbral de n donde el
+          bloqueado supera al naïve por el ahorro en DRAM global?
+
+    E_GPU_multi: Floyd-Warshall naïve multi-GPU coordinado por Ray.
+        Un actor por GPU física (A100), partición por filas en VRAM.
+        → Responde: ¿Escala el speedup al añadir más A100? ¿En qué n
+          el overhead de IPC entre GPUs queda amortizado?
+
+    E_GPU_blocked_multi: Floyd-Warshall bloqueado multi-GPU coordinado por Ray.
+        Mismo particionamiento que E_GPU_multi, pero con cómputo bloqueado
+        (shared memory local a cada GPU), solo Phase 1+2row del owner, y
+        Phase 2col+3 local en cada actor.
+        → Responde: ¿El bloqueado multi-GPU supera al naïve multi-GPU para n grande?
 """
 import math
 from dataclasses import dataclass
@@ -171,6 +187,51 @@ def generar_escenarios(
             num_actores=1,
             num_repeticiones=config.num_repeticiones,
         ))
+
+    # ── E_GPU_blocked: GPU bloqueado con CuPy RawKernel ──────────────────────
+    # Tres fases por tile usando shared memory. Compara directamente con
+    # gpu_secuencial (mismo resultado, distinta estrategia de acceso a DRAM).
+    # Solo se ejecuta si GPU disponible (mismo guard que E_GPU en ejecutar_benchmarks).
+    for n in config.tamanos_matriz:
+        escenarios.append(Escenario(
+            id=f"EGPU_blocked_n{n}",
+            grupo="E_GPU_blocked",
+            descripcion=f"GPU bloqueado (RawKernel 3 fases, B={16}): n={n}",
+            n=n,
+            algoritmo="gpu_blocked",
+            num_actores=0,
+            num_repeticiones=config.num_repeticiones,
+        ))
+
+    # ── E_GPU_multi: Floyd-Warshall naïve multi-GPU con Ray ──────────────────
+    # Un actor por GPU física (num_gpus=1 en la declaración Ray).
+    # Para que tenga sentido, requiere ≥2 GPUs; con w=1 es baseline single-GPU.
+    for n in config.tamanos_matriz:
+        for w in config.workers_ray:
+            escenarios.append(Escenario(
+                id=f"EGPU_multi_n{n}_w{w}",
+                grupo="E_GPU_multi",
+                descripcion=f"GPU naïve multi ({w} actores, 1 GPU c/u): n={n}",
+                n=n,
+                algoritmo="gpu_ray_multi",
+                num_actores=w,
+                num_repeticiones=config.num_repeticiones,
+            ))
+
+    # ── E_GPU_blocked_multi: Floyd-Warshall bloqueado multi-GPU con Ray ──────
+    # Misma partición de filas que E_GPU_multi pero cómputo bloqueado dentro
+    # de cada actor: Ph1+Ph2row en owner, Ph2col+Ph3 local en todos.
+    for n in config.tamanos_matriz:
+        for w in config.workers_ray:
+            escenarios.append(Escenario(
+                id=f"EGPU_blocked_multi_n{n}_w{w}",
+                grupo="E_GPU_blocked_multi",
+                descripcion=f"GPU bloqueado multi ({w} actores, 1 GPU c/u): n={n}",
+                n=n,
+                algoritmo="gpu_blocked_multi",
+                num_actores=w,
+                num_repeticiones=config.num_repeticiones,
+            ))
 
     return escenarios
 
