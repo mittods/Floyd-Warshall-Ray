@@ -12,12 +12,7 @@ mkdir -p logs
 export FW_TAMANOS="128,256,512,1024,2048,4096,8192"
 export FW_WORKERS="1,2,4,8,16,32,64"
 export FW_REPETICIONES=10
-
-# OMP_NUM_THREADS=1: numpy no compite con Ray por los cores
 export OMP_NUM_THREADS=1
 
-srun \
-    --container-name=fw-ray \
-    --container-workdir="${PWD}" \
-    python -m experimentos.ejecutar_benchmarks \
-        --escenarios E1_comparacion E2_escal_fuerte E3_escal_debil E4_overhead E5_carga_maxima
+srun python3 -m experimentos.ejecutar_benchmarks \
+    --escenarios E1_comparacion E2_escal_fuerte E3_escal_debil E4_overhead E5_carga_maxima
