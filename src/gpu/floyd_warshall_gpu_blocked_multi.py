@@ -166,11 +166,18 @@ def _crear_actores_bloqueados(
     stride: int,
     B: int,
 ) -> list:
-    """Particiona la matriz padded en filas y crea los actores."""
-    filas_por_actor = max(B, (stride // num_actores // B) * B)
+    """Particiona la matriz padded en filas (múltiplos de B) y crea los actores."""
+    num_block = stride // B
     actores = []
-    for inicio in range(0, stride, filas_por_actor):
-        fin = min(inicio + filas_por_actor, stride)
+    for i in range(num_actores):
+        # Partición balanceada en unidades de bloques B, garantiza exactamente
+        # num_actores actores incluso cuando num_block % num_actores != 0.
+        bid_start = (i * num_block) // num_actores
+        bid_end = ((i + 1) * num_block) // num_actores
+        if bid_start >= bid_end:
+            continue
+        inicio = bid_start * B
+        fin = bid_end * B
         bloque = dist_padded[inicio:fin, :].copy()
         actor = GPUBloqueadoActor.remote(bloque, inicio, n, stride, B)
         actores.append((actor, inicio, fin))

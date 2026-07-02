@@ -68,10 +68,14 @@ class GPUFilasActor:
 
 def _crear_actores_gpu(dist: np.ndarray, num_actores: int) -> list:
     n = dist.shape[0]
-    tamano_bloque = max(1, n // num_actores)
     actores = []
-    for inicio in range(0, n, tamano_bloque):
-        fin = min(inicio + tamano_bloque, n)
+    for i in range(num_actores):
+        # Partición balanceada que garantiza exactamente num_actores actores.
+        # floor(i*n/p) evita la creación de un actor extra cuando n % p != 0.
+        inicio = (i * n) // num_actores
+        fin = ((i + 1) * n) // num_actores
+        if inicio >= fin:
+            continue
         bloque = dist[inicio:fin, :].copy()
         actor = GPUFilasActor.remote(bloque, inicio)
         actores.append((actor, inicio, fin))
