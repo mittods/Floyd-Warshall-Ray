@@ -190,6 +190,43 @@ def generar_tabla_recursos(df: pd.DataFrame, ruta_salida: Path) -> None:
     logger.info("Tabla de recursos generada: %s", ruta_salida)
 
 
+def generar_tabla_gpu(df: pd.DataFrame, ruta_salida: Path) -> None:
+    """
+    Tabla GPU: GPU-seq | GPU-bloqueada | GPU+Ray (1 actor) | S_bloq
+
+    Columnas: n | T_gpu_seq (s) | T_gpu_bloq (s) | T_gpu_ray (s) | S_bloq
+    """
+    NS = [1024, 2048, 4096, 8192]
+    filas_tex = []
+
+    def _fmt(v: float) -> str:
+        if np.isnan(v):
+            return "--"
+        return f"{v:.3f}" if v >= 0.01 else f"{v * 1000:.2f} ms"
+
+    for n in NS:
+        def _get(alg: str, filtro_actores: Optional[int] = None) -> float:
+            mask = (df["algoritmo"] == alg) & (df["n"] == n)
+            if filtro_actores is not None:
+                mask &= df["num_actores"] == filtro_actores
+            sub = df[mask]
+            return float(sub["tiempo_media"].values[0]) if not sub.empty else float("nan")
+
+        t_seq  = _get("gpu_secuencial")
+        t_bloq = _get("gpu_blocked")
+        t_ray  = _get("gpu_ray", filtro_actores=1)
+        s_bloq = t_seq / t_bloq if not (np.isnan(t_seq) or np.isnan(t_bloq) or t_bloq == 0) else float("nan")
+
+        s_str = f"{s_bloq:.2f}$\\times$" if not np.isnan(s_bloq) else "--"
+        filas_tex.append(
+            f"  {n} & {_fmt(t_seq)} & {_fmt(t_bloq)} & {_fmt(t_ray)} & {s_str} \\\\"
+        )
+        filas_tex.append("  \\hline")
+
+    ruta_salida.write_text("\n".join(filas_tex), encoding="utf-8")
+    logger.info("Tabla GPU generada: %s", ruta_salida)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -227,6 +264,7 @@ def main() -> None:
     generar_tabla_speedup(df, DIR_RESULTADOS_TEX / "tabla_speedup.tex")
     generar_tabla_overhead(df, DIR_RESULTADOS_TEX / "tabla_overhead.tex")
     generar_tabla_recursos(df, DIR_RESULTADOS_TEX / "tabla_recursos.tex")
+    generar_tabla_gpu(df, DIR_RESULTADOS_TEX / "tabla_gpu.tex")
 
     logger.info("Todas las tablas generadas en %s", DIR_RESULTADOS_TEX)
 

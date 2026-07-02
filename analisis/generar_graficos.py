@@ -369,6 +369,116 @@ def grafico_energia(df: pd.DataFrame) -> None:
     _guardar(fig, "consumo_energia")
 
 
+def grafico_gpu_single_comparacion(df: pd.DataFrame) -> None:
+    """Tiempo vs n: GPU-seq naïve, GPU-bloqueada y GPU+Ray (1 actor)."""
+    NS = [1024, 2048, 4096, 8192]
+    series = [
+        ("gpu_secuencial", "GPU naïve (CuPy)",      0),
+        ("gpu_blocked",    "GPU bloqueada ($B=16$)", 1),
+        ("gpu_ray",        "GPU+Ray (1 actor)",      2),
+    ]
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+    hay_datos = False
+
+    for alg, label, ci in series:
+        sub = df[(df["algoritmo"] == alg) & df["n"].isin(NS)].sort_values("n")
+        if sub.empty:
+            continue
+        hay_datos = True
+        ax.plot(sub["n"], sub["tiempo_media"],
+                marker=MARCADORES[ci], color=COLORES[ci], label=label)
+        if "tiempo_ic95_radio" in sub.columns:
+            ax.fill_between(sub["n"],
+                            sub["tiempo_media"] - sub["tiempo_ic95_radio"],
+                            sub["tiempo_media"] + sub["tiempo_ic95_radio"],
+                            alpha=0.15, color=COLORES[ci])
+
+    if not hay_datos:
+        logger.warning("Sin datos GPU single para gpu_single_comparacion.")
+        return
+
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_xlabel("Tamaño de matriz $n$")
+    ax.set_ylabel("Tiempo de ejecución (s)")
+    ax.set_title("GPU single: naïve vs. bloqueado vs. +Ray")
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
+    _guardar(fig, "gpu_single_comparacion")
+
+
+def grafico_gpu_multi_speedup(df: pd.DataFrame) -> None:
+    """Speedup multi-GPU naïve: S(p) = T(1 GPU)/T(p GPUs) vs. num_actores."""
+    NS = [1024, 2048, 4096, 8192]
+    df_multi = df[df["algoritmo"] == "gpu_ray_multi"].copy()
+
+    if df_multi.empty:
+        logger.warning("Sin datos E_GPU_multi para gpu_multi_speedup.")
+        return
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+
+    for ci, n in enumerate(NS):
+        sub = df_multi[df_multi["n"] == n].sort_values("num_actores")
+        ref = sub[sub["num_actores"] == 1]
+        if sub.empty or ref.empty:
+            continue
+        t_base = ref["tiempo_media"].values[0]
+        sub = sub.copy()
+        sub["speedup"] = t_base / sub["tiempo_media"]
+        ax.plot(sub["num_actores"], sub["speedup"],
+                marker=MARCADORES[ci], color=COLORES[ci], label=f"$n={n}$")
+
+    ax.plot([1, 3], [1, 3], "k--", linewidth=0.8, label="Ideal")
+    ax.set_xlabel("GPUs (actores Ray)")
+    ax.set_ylabel("Speedup $S(p)$")
+    ax.set_title("Escalabilidad multi-GPU naïve")
+    ax.set_xticks([1, 2, 3])
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    _guardar(fig, "gpu_multi_speedup")
+
+
+def grafico_gpu_blocked_multi_speedup(df: pd.DataFrame) -> None:
+    """Speedup multi-GPU: naïve (—) vs. bloqueado (- -) para n grandes."""
+    NS = [2048, 4096, 8192]
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+    hay_datos = False
+
+    for ci, n in enumerate(NS):
+        for alg, estilo, etiq in [
+            ("gpu_ray_multi",     "-",  "naïve"),
+            ("gpu_blocked_multi", "--", "bloq."),
+        ]:
+            sub = df[(df["algoritmo"] == alg) & (df["n"] == n)].sort_values("num_actores")
+            ref = sub[sub["num_actores"] == 1]
+            if sub.empty or ref.empty:
+                continue
+            hay_datos = True
+            t_base = ref["tiempo_media"].values[0]
+            sub = sub.copy()
+            sub["speedup"] = t_base / sub["tiempo_media"]
+            ax.plot(sub["num_actores"], sub["speedup"],
+                    linestyle=estilo, marker=MARCADORES[ci], color=COLORES[ci],
+                    label=f"$n={n}$ {etiq}")
+
+    if not hay_datos:
+        logger.warning("Sin datos multi-GPU para gpu_blocked_multi_speedup.")
+        return
+
+    ax.plot([1, 3], [1, 3], "k:", linewidth=0.8, label="Ideal")
+    ax.set_xlabel("GPUs (actores Ray)")
+    ax.set_ylabel("Speedup $S(p)$")
+    ax.set_title("Multi-GPU: naïve (—) vs. bloqueado (- -)")
+    ax.set_xticks([1, 2, 3])
+    ax.legend(fontsize=7, ncol=2)
+    ax.grid(True, alpha=0.3)
+    _guardar(fig, "gpu_blocked_multi_speedup")
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -400,6 +510,9 @@ def main() -> None:
     grafico_escalabilidad_debil(df_agg)
     grafico_recursos(df_agg)
     grafico_energia(df_agg)
+    grafico_gpu_single_comparacion(df_agg)
+    grafico_gpu_multi_speedup(df_agg)
+    grafico_gpu_blocked_multi_speedup(df_agg)
 
     logger.info("Todos los gráficos generados en %s", DIR_GRAFICOS)
 
