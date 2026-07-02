@@ -261,7 +261,7 @@ def grafico_escalabilidad_debil(df: pd.DataFrame) -> None:
 
 def grafico_recursos(df: pd.DataFrame) -> None:
     """GPU utilization and peak RAM for single-GPU algorithms (E_GPU, E_GPU_blocked)."""
-    NS = [1024, 2048, 4096, 8192]
+    NS = [1024, 2048, 4096, 8192, 16384]
     series = [
         ("gpu_secuencial", "GPU naïve",        0),
         ("gpu_blocked",    "GPU bloqueada",     1),
@@ -322,7 +322,7 @@ def grafico_energia(df: pd.DataFrame) -> None:
         logger.warning("Columna '%s' no encontrada.", col)
         return
 
-    NS = [1024, 2048, 4096, 8192]
+    NS = [1024, 2048, 4096, 8192, 16384]
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
 
     # Panel izquierdo: energía vs n — algoritmos GPU de 1 GPU
@@ -385,7 +385,7 @@ def grafico_energia(df: pd.DataFrame) -> None:
 
 def grafico_gpu_single_comparacion(df: pd.DataFrame) -> None:
     """Tiempo vs n: GPU-seq naïve, GPU-bloqueada y GPU+Ray (1 actor)."""
-    NS = [1024, 2048, 4096, 8192]
+    NS = [1024, 2048, 4096, 8192, 16384]
     series = [
         ("gpu_secuencial", "GPU naïve (CuPy)",      0),
         ("gpu_blocked",    "GPU bloqueada ($B=16$)", 1),
@@ -425,7 +425,7 @@ def grafico_gpu_single_comparacion(df: pd.DataFrame) -> None:
 
 def grafico_gpu_multi_speedup(df: pd.DataFrame) -> None:
     """Speedup multi-GPU naïve: S(p) = T(1 GPU)/T(p GPUs) vs. num_actores."""
-    NS = [1024, 2048, 4096, 8192]
+    NS = [1024, 2048, 4096, 8192, 16384]
     df_multi = df[df["algoritmo"] == "gpu_ray_multi"].copy()
 
     if df_multi.empty:
@@ -457,7 +457,7 @@ def grafico_gpu_multi_speedup(df: pd.DataFrame) -> None:
 
 def grafico_gpu_blocked_multi_speedup(df: pd.DataFrame) -> None:
     """Speedup multi-GPU: naïve (—) vs. bloqueado (- -) para n grandes."""
-    NS = [2048, 4096, 8192]
+    NS = [2048, 4096, 8192, 16384]
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
     hay_datos = False

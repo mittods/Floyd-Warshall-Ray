@@ -199,7 +199,7 @@ def generar_tabla_gpu(df: pd.DataFrame, ruta_salida: Path) -> None:
 
     Columnas: n | T_gpu_seq (s) | T_gpu_bloq (s) | T_gpu_ray (s) | S_bloq
     """
-    NS = [1024, 2048, 4096, 8192]
+    NS = [1024, 2048, 4096, 8192, 16384]
     filas_tex = []
 
     def _fmt(v: float) -> str:
