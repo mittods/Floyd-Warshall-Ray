@@ -31,10 +31,12 @@ ayuda:
 	@echo "  $(CYAN)make validar$(RESET)           Validar entorno antes de ejecutar"
 	@echo ""
 	@echo "$(BOLD)DOCKER$(RESET)"
-	@echo "  $(CYAN)make docker-build$(RESET)      Construir imagen Docker localmente"
-	@echo "  $(CYAN)make docker-pull$(RESET)       Descargar imagen desde GHCR"
-	@echo "  $(CYAN)make docker-shell$(RESET)      Iniciar shell interactivo en Docker"
-	@echo "  $(CYAN)make docker-benchmark$(RESET)  Ejecutar benchmarks dentro de Docker"
+	@echo "  $(CYAN)make docker-build$(RESET)          Construir imagen Docker localmente"
+	@echo "  $(CYAN)make docker-pull$(RESET)           Descargar imagen desde GHCR"
+	@echo "  $(CYAN)make docker-shell$(RESET)          Shell interactivo (CPU)"
+	@echo "  $(CYAN)make docker-shell-gpu$(RESET)      Shell interactivo (GPU, requiere nvidia-container-toolkit)"
+	@echo "  $(CYAN)make docker-benchmark$(RESET)      Benchmarks CPU en Docker"
+	@echo "  $(CYAN)make docker-benchmark-gpu$(RESET)  Benchmarks GPU en Docker"
 	@echo ""
 	@echo "$(BOLD)EJECUCIÓN$(RESET)"
 	@echo "  $(CYAN)make benchmark$(RESET)         Ejecutar todos los experimentos (recomendado)"
@@ -78,17 +80,27 @@ docker-build:
 .PHONY: docker-pull
 docker-pull:
 	@echo "$(BOLD)Descargando imagen desde GHCR...$(RESET)"
-	docker pull ghcr.io/martinmaza/floyd-warshall-ray:latest
+	docker pull ghcr.io/mittods/floyd-warshall-ray:latest
 
 .PHONY: docker-shell
 docker-shell:
-	@echo "$(BOLD)Iniciando shell interactivo en Docker...$(RESET)"
-	docker-compose run --rm benchmark bash
+	@echo "$(BOLD)Iniciando shell interactivo en Docker (CPU)...$(RESET)"
+	docker compose run --rm benchmark bash
+
+.PHONY: docker-shell-gpu
+docker-shell-gpu:
+	@echo "$(BOLD)Iniciando shell interactivo en Docker (GPU, requiere nvidia-container-toolkit)...$(RESET)"
+	docker compose --profile gpu run --rm benchmark-gpu bash
 
 .PHONY: docker-benchmark
 docker-benchmark:
-	@echo "$(BOLD)Ejecutando benchmarks en Docker...$(RESET)"
-	docker-compose run --rm benchmark make benchmark
+	@echo "$(BOLD)Ejecutando benchmarks CPU en Docker...$(RESET)"
+	docker compose run --rm benchmark make benchmark
+
+.PHONY: docker-benchmark-gpu
+docker-benchmark-gpu:
+	@echo "$(BOLD)Ejecutando benchmarks GPU en Docker (requiere nvidia-container-toolkit)...$(RESET)"
+	docker compose --profile gpu run --rm benchmark-gpu make benchmark
 
 # ── Ejecución de benchmarks ──────────────────────────────────────────────────
 .PHONY: benchmark

@@ -36,6 +36,10 @@ class GPUFilasActor:
     """
 
     def __init__(self, bloque: np.ndarray, inicio_fila: int):
+        import os
+        # Caché JIT por proceso: evita deadlock cuando múltiples actores
+        # compilan kernels CUDA simultáneamente en el mismo directorio.
+        os.environ['CUPY_CACHE_DIR'] = f'/tmp/cupy_cache_{os.getpid()}'
         import cupy as cp
         self.cp = cp
         self.dist = cp.asarray(bloque, dtype=cp.float64)

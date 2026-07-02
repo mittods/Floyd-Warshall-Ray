@@ -1,72 +1,90 @@
 # Docker Compose para el entorno experimental Floyd-Warshall con Ray
 #
-# Uso principal:
-#   docker-compose run --rm benchmark make benchmark
-#   docker-compose run --rm benchmark bash
+# Uso rápido:
+#   docker compose run --rm benchmark make benchmark      # CPU
+#   docker compose run --rm benchmark make mostrar-escenarios
+#   docker compose run --rm benchmark bash                # shell interactivo
+#   docker compose run --rm analisis                      # generar tablas y gráficos
+#
+# GPU (requiere nvidia-container-toolkit en el host):
+#   docker compose --profile gpu run --rm benchmark-gpu make benchmark
+#
+# Escalar experimentos (ejemplo Patagon):
+#   FW_TAMANOS="1024,2048,4096,8192" FW_WORKERS="1,2,3" \
+#     docker compose --profile gpu run --rm benchmark-gpu make benchmark
 
 services:
-  # ── Servicio principal de benchmarks ─────────────────────────────────────
+
+  # ── Servicio CPU: experimentos sin GPU ────────────────────────────────────
   benchmark:
-    image: ghcr.io/martinmaza/floyd-warshall-ray:latest
+    image: ghcr.io/mittods/floyd-warshall-ray:latest
     build:
       context: .
       dockerfile: docker/Dockerfile
     container_name: fw_benchmark
 
     environment:
-      # Configuración del experimento (sobreescribir según necesidad)
-      FW_TAMANOS: "${FW_TAMANOS:-64,128,256,512,1024,2048}"
+      FW_TAMANOS: "${FW_TAMANOS:-256,512,1024,2048}"
       FW_WORKERS: "${FW_WORKERS:-1,2,4,8,16,32}"
-      FW_REPETICIONES: "${FW_REPETICIONES:-10}"
+      FW_REPETICIONES: "${FW_REPETICIONES:-5}"
       FW_SEMILLA: "${FW_SEMILLA:-42}"
       FW_DENSIDAD: "${FW_DENSIDAD:-0.7}"
       FW_INTERVALO_MONITOR: "${FW_INTERVALO_MONITOR:-0.5}"
-
-      # Recursos Ray (vacío = autodetección)
       RAY_NUM_CPUS: "${RAY_NUM_CPUS:-}"
       RAY_OBJECT_STORE_MEMORY: "${RAY_OBJECT_STORE_MEMORY:-}"
-
-      # Reproducibilidad: identificar la imagen exacta usada
+      CUPY_CACHE_DIR: "/tmp/cupy_cache"
       DOCKER_IMAGE_TAG: "${DOCKER_IMAGE_TAG:-latest}"
 
-      # GPU NVIDIA TITAN V — activa solo si nvidia-container-toolkit está instalado
-      # Si no hay GPU, el benchmark omite automáticamente los escenarios E_GPU
-      NVIDIA_VISIBLE_DEVICES: "${NVIDIA_VISIBLE_DEVICES:-all}"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-
     volumes:
-      # Persistir resultados en el host para análisis posterior
       - ./resultados:/app/resultados
       - ./graficos:/app/graficos
       - ./metricas:/app/metricas
-      # Código fuente montado para desarrollo sin reconstruir imagen
       - ./src:/app/src:ro
       - ./experimentos:/app/experimentos:ro
       - ./analisis:/app/analisis:ro
 
-    # Acceso a GPU via nvidia-container-toolkit
-    runtime: nvidia
-
-    # Acceso a IPC del host: necesario para memoria compartida de Ray
     ipc: host
-
-    # Red del host para mejor rendimiento de Ray
     network_mode: host
-
-    # Sin tiempo límite para experimentos largos
     stdin_open: true
     tty: true
-
-    # El contenedor NO ejecuta nada automáticamente
     command: bash
+
+  # ── Servicio GPU: experimentos con NVIDIA GPU ─────────────────────────────
+  # Requiere nvidia-container-toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+  # Activar con: docker compose --profile gpu run --rm benchmark-gpu <cmd>
+  benchmark-gpu:
+    extends:
+      service: benchmark
+    container_name: fw_benchmark_gpu
+    profiles: ["gpu"]
+
+    environment:
+      FW_TAMANOS: "${FW_TAMANOS:-1024,2048,4096}"
+      FW_WORKERS: "${FW_WORKERS:-1,2,4}"
+      FW_REPETICIONES: "${FW_REPETICIONES:-5}"
+      FW_SEMILLA: "${FW_SEMILLA:-42}"
+      FW_DENSIDAD: "${FW_DENSIDAD:-0.7}"
+      FW_INTERVALO_MONITOR: "${FW_INTERVALO_MONITOR:-0.1}"
+      RAY_NUM_CPUS: "${RAY_NUM_CPUS:-}"
+      RAY_OBJECT_STORE_MEMORY: "${RAY_OBJECT_STORE_MEMORY:-}"
+      CUPY_CACHE_DIR: "/tmp/cupy_cache"
+      DOCKER_IMAGE_TAG: "${DOCKER_IMAGE_TAG:-latest}"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # ── Servicio de análisis post-benchmark ──────────────────────────────────
   analisis:
-    image: ghcr.io/martinmaza/floyd-warshall-ray:latest
+    image: ghcr.io/mittods/floyd-warshall-ray:latest
     container_name: fw_analisis
 
     environment:
-      FW_TAMANOS: "${FW_TAMANOS:-64,128,256,512,1024,2048}"
+      FW_TAMANOS: "${FW_TAMANOS:-256,512,1024,2048}"
       FW_WORKERS: "${FW_WORKERS:-1,2,4,8,16,32}"
 
     volumes:
@@ -74,6 +92,7 @@ services:
       - ./graficos:/app/graficos
       - ./src:/app/src:ro
       - ./analisis:/app/analisis:ro
+      - ./experimentos:/app/experimentos:ro
 
     command: >
       bash -c "
