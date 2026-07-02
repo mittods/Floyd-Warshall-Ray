@@ -264,9 +264,9 @@ $p \in \{1, 2, 3\}$ GPUs, 5 repeticiones):
 
 \subsection{Comparación de Tiempos CPU (E1)}
 
-La Tabla~\ref{tab:tiempos} presenta los tiempos medios con IC 95\% para
-la comparación directa secuencial vs.\ Ray (32 actores) en la partición
-CPU del clúster Patagón.
+La Tabla~\ref{tab:tiempos} y la Fig.~\ref{fig:tiempo_tamano} presentan
+los tiempos medios con IC 95\% para la comparación directa secuencial
+vs.\ Ray (32 actores) en la partición CPU del clúster Patagón.
 
 \begin{table}[htbp]
 \caption{Tiempos de ejecución: Secuencial vs.\ Ray (32 actores)}
@@ -280,6 +280,13 @@ CPU del clúster Patagón.
 \end{tabular}
 \end{center}
 \end{table}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/tiempo_vs_tamano.pdf}}
+\caption{Tiempo de ejecución (escala log) vs.\ $n$: secuencial vs.\ Ray
+(32 actores, CPU).}
+\label{fig:tiempo_tamano}
+\end{figure}
 
 \subsection{Speedup y Escalabilidad Fuerte (E1, E2)}
 
@@ -312,6 +319,13 @@ y con el número de actores, respectivamente.
 \caption{Escalabilidad fuerte ($n=4096$): speedup vs.\ actores. La línea
 discontinua representa el speedup ideal.}
 \label{fig:speedup_workers}
+\end{figure}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/eficiencia_vs_workers.pdf}}
+\caption{Eficiencia paralela $E(p) = S(p)/p$ vs.\ actores para $n=4096$
+(E2) y $n=8192$ (E5). La línea horizontal indica eficiencia ideal.}
+\label{fig:eficiencia}
 \end{figure}
 
 \subsection{Overhead de Ray (E4)}
@@ -362,6 +376,20 @@ constante.
 \end{tabular}
 \end{center}
 \end{table}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_cpu_ram.pdf}}
+\caption{Utilización de CPU (\%) y RAM pico (MB) por configuración (E1):
+secuencial vs.\ Ray (32 actores).}
+\label{fig:cpu_ram}
+\end{figure}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_energia.pdf}}
+\caption{Energía total consumida (J): izq.\ vs.\ $n$ (E1); der.\ vs.\
+actores para $n=8192$ (E5).}
+\label{fig:energia}
+\end{figure}
 
 \subsection{GPU single: naïve vs.\ bloqueado (E\_GPU, E\_GPU\_blocked)}
 
