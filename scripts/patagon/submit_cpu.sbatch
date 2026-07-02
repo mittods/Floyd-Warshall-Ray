@@ -9,10 +9,11 @@
 
 mkdir -p logs
 
-export FW_TAMANOS="128,256,512,1024,2048,4096,8192"
+export FW_TAMANOS="128,256,512,1024,2048,4096"
 export FW_WORKERS="1,2,4,8,16,32"
-export FW_REPETICIONES=10
+export FW_REPETICIONES=3
 export OMP_NUM_THREADS=1
 
 srun python3 -m experimentos.ejecutar_benchmarks \
-    --escenarios E1_comparacion E2_escal_fuerte E3_escal_debil E4_overhead E5_carga_maxima
+    --escenarios E1_comparacion E2_escal_fuerte E3_escal_debil E4_overhead E5_carga_maxima \
+    --precargar
