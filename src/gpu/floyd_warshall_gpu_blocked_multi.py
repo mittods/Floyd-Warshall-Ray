@@ -265,6 +265,12 @@ def floyd_warshall_gpu_blocked_multi(
         ini_res, bloque = ray.get(actor.obtener_resultado.remote())
         dist_result_padded[ini_res:ini_res + bloque.shape[0], :] = bloque
     resultado = dist_result_padded[:n, :n]
+
+    # Matar actores explícitamente para liberar GPUs en el pool de Ray.
+    for actor, _, _ in actores_info:
+        ray.kill(actor)
+    del actores_info
+
     t_rearm = time.perf_counter() - t_rearm_inicio
 
     t_total = t_setup + t_calculo + t_rearm

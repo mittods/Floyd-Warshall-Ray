@@ -147,6 +147,14 @@ def floyd_warshall_gpu_ray_multi(
     for actor, inicio, _ in actores_info:
         ini_res, bloque = ray.get(actor.obtener_resultado.remote())
         resultado[ini_res:ini_res + bloque.shape[0], :] = bloque
+
+    # Matar actores explícitamente para liberar GPUs en el pool de Ray.
+    # Sin esto, los handles quedan vivos hasta el GC, y los escenarios
+    # siguientes con más actores no encuentran GPUs disponibles.
+    for actor, _, _ in actores_info:
+        ray.kill(actor)
+    del actores_info
+
     t_rearm = time.perf_counter() - t_rearm_inicio
 
     t_total = t_setup + t_calculo + t_rearm
