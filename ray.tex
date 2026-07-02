@@ -15,12 +15,11 @@
 \hypersetup{hidelinks}
 
 \newcommand{\FW}{Floyd-Warshall}
-\newcommand{\INF}{\infty}
 
 \begin{document}
 
-\title{Paralelización del Algoritmo Floyd-Warshall mediante Ray:\\
-Análisis de Rendimiento y Escalabilidad Multi-GPU en Clúster HPC}
+\title{Paralelización de Floyd-Warshall con Ray:\\
+Rendimiento y Escalabilidad en GPU sobre Clúster HPC}
 
 \author{
 \IEEEauthorblockN{Martín Maza}
@@ -36,90 +35,89 @@ Análisis de Rendimiento y Escalabilidad Multi-GPU en Clúster HPC}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{abstract}
-El algoritmo de \FW{} resuelve el problema de caminos mínimos entre todos
-los pares de vértices en tiempo $O(n^3)$, con una dependencia secuencial
-en el bucle externo que limita las estrategias de paralelización. En este
-trabajo evaluamos experimentalmente el framework Ray para paralelizar \FW{}
-sobre el clúster HPC Patagón (UACh): 64 núcleos AMD EPYC 9534 y hasta
-3 GPUs NVIDIA RTX A4000 (16 GB GDDR6). Implementamos seis variantes:
-secuencial CPU (NumPy), paralela CPU con actores Ray, GPU secuencial (CuPy),
-GPU bloqueada de tres fases (CuPy RawKernel), GPU naïve multi-GPU y GPU
-bloqueada multi-GPU, ambas coordinadas por Ray con un actor por GPU física.
-El diseño bloqueado reduce las barreras de sincronización de $n$ a $n/B$
-iteraciones y mejora el aprovechamiento de la memoria compartida (L1) de
-cada GPU, mientras que la distribución multi-GPU con Ray permite escalar
-el cómputo a través de múltiples aceleradores en el nodo.
+El algoritmo de \FW{} calcula los caminos mínimos entre todos los pares
+de vértices de un grafo en tiempo $O(n^3)$. Su bucle externo es
+obligatoriamente secuencial, lo que limita las estrategias de
+paralelización. En este trabajo se implementarán y analizarán seis
+variantes de \FW{} sobre el clúster Patagón (UACh): secuencial CPU,
+paralela CPU con actores Ray, GPU básica (CuPy), GPU segmentada de
+tres fases (RawKernel, $B=16$), y versiones multi-GPU, estando estas
+dos últimas coordinadas por Ray. Los experimentos cubren matrices de
+hasta $n=16384$ con hasta 3 GPUs NVIDIA RTX A4000 en paralelo. El
+principal resultado es que Ray en CPU solo supera al secuencial para
+$n \geq 2048$, con speedup máximo de $2.46\times$ a 32 actores y
+$n=4096$. En GPU, la variante segmentada en una sola GPU es la más
+eficiente ($6.2\times$ sobre la básica para $n \geq 4096$), mientras
+que la distribución multi-GPU con Ray no logra superar a la segmentada
+simple para ningún $n$ probado, debido al costo de comunicación
+inter-GPU por el \textit{object store} de Ray.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Floyd-Warshall, Ray, CuPy, computación paralela, HPC, actores,
-caminos mínimos, escalabilidad, GPU, multi-GPU, blocked Floyd-Warshall
+Floyd-Warshall, Ray, CuPy, computación paralela, HPC,
+caminos mínimos, GPU, multi-GPU, Floyd-Warshall segmentado
 \end{IEEEkeywords}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Introducción}
 
-El cálculo de caminos mínimos entre todos los pares de vértices (APSP) es
-central en teoría de grafos, con aplicaciones en redes, navegación y
-logística. El algoritmo de \FW{} lo resuelve en $O(n^3)$ para grafos
-densos, siendo la referencia para pesos arbitrarios.
+El problema de caminos mínimos entre todos los pares de vértices (APSP)
+aparece en aplicaciones de redes, logística y bioinformática. El
+algoritmo de \FW{} es la solución de referencia para grafos densos con
+pesos arbitrarios: itera $n$ veces sobre la matriz de distancias y en
+cada paso actualiza todos los pares $(i,j)$. La actualización de cada
+par es independiente dentro de un paso, pero cada paso depende del
+anterior, lo que impone $n$ barreras de sincronización inevitables.
 
-Con el auge de arquitecturas multinúcleo y GPUs, la paralelización de
-algoritmos clásicos mediante frameworks de alto nivel es de creciente
-interés en HPC. Ray simplifica la programación paralela en Python mediante
-actores y un almacén de objetos compartidos. CuPy extiende NumPy con
-kernels CUDA, permitiendo ejecutar operaciones matriciales en GPU
-transparentemente. La combinación de ambos frameworks permite coordinar
-múltiples GPUs físicas desde Python sin código MPI explícito.
-
-La pregunta central es: \textit{¿cómo escala \FW{} al distribuir el
-cómputo entre múltiples GPUs con Ray, y qué gana la variante bloqueada
-frente a la naïve en términos de eficiencia de memoria?} Las contribuciones son:
+En este trabajo se evalúa si Ray —un framework Python para cómputo
+paralelo basado en actores— permite acelerar \FW{} de forma práctica,
+tanto en CPU como en GPU. La pregunta central es: \textit{¿cuándo
+compensa el costo de comunicación de Ray frente a la ganancia de
+paralelismo?} Las contribuciones son:
 
 \begin{itemize}
-  \item Análisis formal de dependencias y justificación de la estrategia de
-        paralelización por partición de filas.
-  \item Implementación de seis variantes reproducibles: CPU secuencial,
-        CPU-Ray, GPU-seq (CuPy naïve), GPU-bloqueada (RawKernel 3 fases),
-        GPU-multi naïve (Ray, 1 actor/GPU) y GPU-multi bloqueada (Ray).
-  \item Evaluación experimental con nueve grupos de escenarios sobre el
-        clúster Patagón (AMD EPYC 9534 + NVIDIA RTX A4000).
-  \item Cuantificación del overhead de Ray por barrera de sincronización
-        e identificación del umbral de rentabilidad en cada variante.
+  \item Seis implementaciones reproducibles de \FW{}: CPU secuencial,
+        CPU-Ray, GPU básica (CuPy), GPU segmentada (RawKernel, $B=16$),
+        GPU multi-básica con Ray y GPU multi-segmentada con Ray.
+  \item Evaluación sistemática con nueve grupos de escenarios sobre el
+        clúster HPC Patagón (AMD EPYC 9534 + NVIDIA RTX A4000).
+  \item Identificación del umbral $n$ a partir del cual Ray resulta
+        rentable en cada variante.
 \end{itemize}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Trabajos Relacionados}
 \label{sec:relacionados}
 
-La paralelización de \FW{} ha sido estudiada en múltiples arquitecturas.
-Zhao et al.\ obtienen speedups de hasta $40\times$ en GPU con CUDA para la
-fase interna $(i,j)$. Venkataraman et al.\ proponen \textit{blocked
-Floyd-Warshall} para mejorar localidad de caché y facilitar paralelización
-con OpenMP. Xia y Prasanna demuestran que la comunicación óptima por
-iteración $k$ es $O(n)$ manteniendo filas distribuidas, diseño adoptado en
-este trabajo tanto para la variante CPU-Ray como para GPU-multi.
+La paralelización de \FW{} en GPU ha sido estudiada desde CUDA C:
+MTB90~\cite{mtb90} proporciona una implementación de referencia en CUDA
+que aplica el algoritmo de tres fases —bloque dependiente, bloques
+semidependientes y bloques independientes— para aprovechar la memoria
+compartida y reducir accesos a DRAM global, esquema en el que se basa
+la variante GPU segmentada de este trabajo.
+Venkataraman et al.~\cite{venkataraman2003} formalizan el \textit{blocked
+Floyd-Warshall} y demuestran que la descomposición en bloques es condición
+suficiente para aprovechar eficientemente la jerarquía de memoria.
 
-Ray fue evaluado originalmente en aprendizaje reforzado; trabajos posteriores
-lo aplican a procesamiento de datos a escala. No encontramos estudios previos
-que evalúen actores Ray para \FW{} con análisis de overhead, comparación
-GPU directa y distribución a través de múltiples GPUs físicas.
+Ray fue diseñado para aprendizaje reforzado distribuido, pero trabajos
+recientes lo aplican a procesamiento de datos a gran escala. No se
+encontraron estudios previos que combinen Ray con \FW{} y analicen
+su costo en escenarios multi-GPU.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Solución Propuesta}
+\section{Implementaciones}
 \label{sec:solucion}
 
-\subsection{Análisis de Dependencias}
+\subsection{Dependencias del algoritmo}
 
-Para cada iteración $k$ del Algoritmo~\ref{alg:fw}, la actualización:
+En cada iteración $k$, la actualización:
 \begin{equation}
   d[i][j] \leftarrow \min(d[i][j],\; d[i][k] + d[k][j])
-  \label{eq:fw}
 \end{equation}
-es independiente en $(i,j)$ para $k$ fijo, pero el bucle sobre $k$ es
-\textbf{secuencialmente obligatorio}: la iteración $k+1$ requiere los
-valores de la iteración $k$. Esto impone $n$ barreras de sincronización
-inevitables.
+es paralela en $(i,j)$ para $k$ fijo. Sin embargo, la iteración $k+1$
+necesita los resultados de $k$: el bucle externo es obligatoriamente
+secuencial y no se puede paralelizar. Esto obliga a sincronizar $n$
+veces, una por cada valor de $k$.
 
 \begin{algorithm}
 \caption{Floyd-Warshall}
@@ -135,59 +133,57 @@ inevitables.
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Variante CPU+Ray}
+\subsection{CPU + Ray}
 
-Se crean $p$ actores Ray con $\lceil n/p \rceil$ filas cada uno. Cada actor
-declara $\lfloor C/p \rfloor$ CPUs ante el scheduler de Ray (donde $C$ es
-el total de cores disponibles), simulando nodos computacionales dedicados.
-Para cada $k$: (i) se publica la fila $k$ en el \textit{object store}
-($O(n)$ transferencia); (ii) todos los actores actualizan su bloque con
-NumPy vectorizado; (iii) el coordinador espera con \texttt{ray.get}.
+Se crean $p$ actores, cada uno con $\lceil n/p \rceil$ filas. En cada
+iteración $k$: el actor dueño de la fila $k$ la publica en el
+\textit{object store} de Ray; todos los actores la leen y actualizan
+su bloque con NumPy vectorizado; el coordinador espera con
+\texttt{ray.get}. El costo adicional por iteración $k$ corresponde a
+la serialización, almacenamiento y distribución de un vector de $n$
+elementos, denominado $t_{barrera}$.
 
-\subsection{Variante GPU secuencial (CuPy naïve)}
+\subsection{GPU básica (CuPy)}
 
-La matriz se transfiere una sola vez a la GPU. Las $n$ iteraciones se
-ejecutan directamente con operaciones CuPy vectorizadas (\texttt{cp.minimum}),
-explotando el paralelismo masivo interno de la GPU sin overhead de
-framework por iteración.
+La versión básica copia la matriz una sola vez a la GPU y ejecuta las
+$n$ iteraciones mediante operaciones vectorizadas de CuPy
+(\texttt{cp.minimum}), sin acceso explícito a memoria compartida ni
+overhead de framework por iteración.
 
-\subsection{Variante GPU bloqueada (CuPy RawKernel)}
+\subsection{GPU segmentada (RawKernel, $B=16$)}
 
-Implementa el algoritmo bloqueado de tres fases con tamaño de bloque $B=16$
-mediante kernels CUDA compilados inline con CuPy RawKernel:
+La versión segmentada divide la matriz en bloques de $16 \times 16$
+elementos y ejecuta tres fases por cada paso $k$ mediante kernels CUDA
+compilados inline:
 
 \begin{itemize}
-  \item \textbf{Phase 1} (pivote): actualiza el bloque diagonal $(b,b)$
-        en memoria compartida. Una sola llamada de grid $1\times1$.
-  \item \textbf{Phase 2} (semi-dependiente): actualiza fila $b$ y columna
-        $b$ de bloques usando el pivote. Grid $N_b \times 2$.
-  \item \textbf{Phase 3} (independiente): actualiza todos los bloques
-        $(i{\neq}b, j{\neq}b)$ en paralelo total. Grid $N_b \times N_b$.
+  \item \textbf{Fase 1} (pivote): actualiza el bloque diagonal del paso
+        actual en memoria compartida.
+  \item \textbf{Fase 2}: actualiza la fila y columna de bloques del paso
+        actual usando el bloque pivote.
+  \item \textbf{Fase 3}: actualiza todos los demás bloques en paralelo.
 \end{itemize}
 
-donde $N_b = \lceil n/B \rceil$. Cada tile de $B \times B$ float64 ocupa
-2 KB en shared memory. El cómputo por carga desde DRAM global aumenta $B$
-veces respecto al naïve, reduciendo la presión sobre el bus de memoria.
+La ventaja clave es que por cada carga de un bloque $16 \times 16$
+desde la DRAM de la GPU, se realizan 16 iteraciones en memoria
+compartida, que es $\sim100\times$ más rápida que la DRAM global.
+Esto reduce la presión sobre el bus de memoria en un factor $B$.
 
-\subsection{Variante GPU multi (Ray, un actor por GPU)}
+\subsection{GPU multi-básica con Ray}
 
-Se crean $p$ actores Ray con \texttt{@ray.remote(num\_gpus=1)}, asignando
-una GPU física distinta a cada instancia mediante \texttt{CUDA\_VISIBLE\_DEVICES}.
-Cada actor mantiene su partición de filas en la VRAM de su GPU local.
-Para cada iteración $k$: (i) el actor dueño de la fila $k$ la transfiere
-GPU$\to$CPU$\to$object store; (ii) todos los actores reciben la fila vía
-broadcast del object store (CPU$\to$GPU de cada uno); (iii) cada actor
-actualiza sus filas en su propia GPU en paralelo real; (iv) barrera
-\texttt{ray.get}. La comunicación es $O(n)$ por iteración $k$.
+Se asigna un actor Ray a cada GPU física
+(\texttt{@ray.remote(num\_gpus=1)}). Cada actor mantiene su bloque de
+filas en su propia VRAM. Por cada iteración $k$: el actor dueño de la
+fila $k$ la transfiere al \textit{object store}; todos los actores la
+reciben y actualizan su bloque. La comunicación es $O(n)$ por
+iteración, $O(n^2)$ total.
 
-\subsection{Variante GPU bloqueada multi (Ray)}
+\subsection{GPU multi-segmentada con Ray}
 
-Distribuye el algoritmo bloqueado entre $p$ actores GPU. Por cada bloque $b$:
-(i) el actor dueño del bloque-fila $b$ ejecuta Phase~1 y Phase~2 horizontal,
-publicando el bloque pivote ($B \times B$) y la fila-bloque $b$ ($B \times n$)
-en el object store; (ii) todos los actores ejecutan Phase~2 columna y
-Phase~3 localmente usando los datos recibidos. La comunicación total es
-$O(B \cdot n)$ por iteración de bloque, equivalente a $O(n^2)$ total.
+Igual que la anterior, pero usando el algoritmo segmentado. Por cada
+paso de bloque $b$, los actores intercambian el bloque pivote
+($B \times B$) y la fila de bloques ($B \times n$). Las rondas de
+comunicación se reducen de $n$ a $n/B$.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Metodología}
@@ -195,352 +191,311 @@ $O(B \cdot n)$ por iteración de bloque, equivalente a $O(n^2)$ total.
 
 \subsection{Hardware y Software}
 
-Los experimentos se ejecutan sobre el clúster Patagón de la Universidad
-Austral de Chile mediante el scheduler SLURM. Las particiones utilizadas son:
+Los experimentos se ejecutaron sobre el clúster Patagón (UACh) vía
+SLURM:
 
 \begin{itemize}
-  \item \textbf{CPU}: AMD EPYC 9534 (64 núcleos físicos, 2.45 GHz), 256 GB RAM.
-  \item \textbf{GPU}: 3$\times$ NVIDIA RTX A4000 (16 GB GDDR6, 384 GB/s, sm\_86).
+  \item \textbf{CPU}: AMD EPYC 9534, 64 núcleos físicos a 2.45 GHz,
+        256 GB RAM.
+  \item \textbf{GPU}: 3$\times$ NVIDIA RTX A4000, 16 GB GDDR6 cada una,
+        384 GB/s de ancho de banda, arquitectura Ampere (sm\_86).
 \end{itemize}
 
-Software: Python 3.13, Ray 2.55, NumPy 2.4, CuPy 14.1 (CUDA 12.9),
-SciPy 1.18. El entorno se gestiona mediante el entorno conda compartido
-del clúster sin necesidad de contenedores adicionales.
+Software: Python 3.13, Ray 2.55, NumPy 2.4, CuPy 14.1 (CUDA 12.9).
 
 \subsection{Protocolo}
 
-Se realizan 10 repeticiones para experimentos CPU y 5 para GPU por
-configuración, con semillas distintas. Los tiempos se miden con
-\texttt{time.perf\_counter}. Las transferencias GPU se miden separadamente.
-El test de Grubbs a $\alpha=0.05$ elimina outliers; los intervalos de
-confianza al 95\% usan $t$ de Student.
+Se realizaron 3 repeticiones por configuración con semillas distintas.
+Los tiempos se midieron con \texttt{time.perf\_counter}. Los intervalos
+de confianza al 95\% se calcularon con $t$ de Student.
 
 \subsection{Métricas}
 
-Speedup $S(p) = T_{seq}/T_{ray}(p)$, eficiencia paralela $E(p)=S(p)/p$,
-overhead de Ray $T_{ov} = T_{ray} - T_{comp}$, RAM pico (psutil), uso
-de CPU\%, energía total (RAPL diferencial para CPU, pynvml P$\times$t
-para GPU).
+Speedup $S(p) = T_{seq}/T(p)$, eficiencia paralela $E(p) = S(p)/p$,
+uso de CPU\% y RAM (psutil), energía total (pynvml para GPU,
+diferencial RAPL para CPU).
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Escenarios Experimentales}
+\section{Escenarios}
 \label{sec:escenarios}
 
-Se definen nueve grupos de escenarios:
-
-\textbf{CPU} ($n \in \{128, 256, 512, 1024, 2048, 4096, 8192\}$,
-$p \in \{1, 2, 4, 8, 16, 32\}$, 10 repeticiones):
+\textbf{CPU} ($n \in \{128,\ldots,8192\}$, $p \in \{1,2,4,8,16,32\}$):
 
 \begin{itemize}
-  \item \textbf{E1 — Comparación directa}: secuencial vs.\ Ray (32 actores)
-        para cada $n$.
-  \item \textbf{E2 — Escalabilidad fuerte}: $n=4096$ fijo, $p$ variable.
-        Evalúa la ley de Amdahl con overhead de barrera.
-  \item \textbf{E3 — Escalabilidad débil}: $n = 256\sqrt{p}$ (redondeado
-        a múltiplo de $p$), carga constante por actor.
-  \item \textbf{E4 — Overhead}: $n \leq 512$, identifica el punto de
-        cruce donde Ray supera al secuencial.
-  \item \textbf{E5 — Carga máxima}: $n=8192$, todas las configuraciones,
-        5 repeticiones.
+  \item \textbf{E1}: secuencial vs.\ Ray con 32 actores para cada $n$.
+  \item \textbf{E2}: escalabilidad fuerte — $n=2048$ fijo, $p$ variable.
+  \item \textbf{E3}: escalabilidad débil — $n = 256\sqrt{p}$, carga
+        constante por actor.
+  \item \textbf{E4}: overhead — $n \leq 512$, cuánto cuesta Ray cuando
+        el cómputo es pequeño.
+  \item \textbf{E5}: carga máxima — $n=4096$, todos los $p$.
 \end{itemize}
 
-\textbf{GPU} ($n \in \{1024, 2048, 4096, 8192\}$,
-$p \in \{1, 2, 3\}$ GPUs, 5 repeticiones):
+\textbf{GPU} ($n \in \{1024,\ldots,16384\}$, $p \in \{1,2,3\}$ GPUs):
 
 \begin{itemize}
-  \item \textbf{E\_GPU}: GPU secuencial (CuPy naïve) y GPU+Ray con 1 actor.
-        Cuantifica el overhead de Ray sobre una sola GPU.
-  \item \textbf{E\_GPU\_blocked}: GPU bloqueada single (RawKernel, $B=16$).
-        Compara con E\_GPU para medir la ganancia de localidad.
-  \item \textbf{E\_GPU\_multi}: GPU naïve multi (1 actor/A4000, Ray).
-        Evalúa la escalabilidad al añadir GPUs.
-  \item \textbf{E\_GPU\_blocked\_multi}: GPU bloqueada multi (1 actor/GPU, Ray).
-        Combina localidad de memoria y paralelismo inter-GPU.
+  \item \textbf{E\_GPU}: GPU básica vs.\ GPU+Ray con 1 actor.
+  \item \textbf{E\_GPU\_seg}: GPU segmentada en una sola GPU ($B=16$).
+  \item \textbf{E\_GPU\_multi}: multi-básica (1 actor/GPU).
+  \item \textbf{E\_GPU\_seg\_multi}: multi-segmentada (1 actor/GPU).
 \end{itemize}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Resultados}
 \label{sec:resultados}
 
-\subsection{Comparación de Tiempos CPU (E1)}
+\subsection{CPU: cuándo conviene Ray (E1, E2, E5)}
 
-La Tabla~\ref{tab:tiempos} y la Fig.~\ref{fig:tiempo_tamano} presentan
-los tiempos medios con IC 95\% para la comparación directa secuencial
-vs.\ Ray (32 actores) en la partición CPU del clúster Patagón.
-
-\begin{table}[htbp]
-\caption{Tiempos de ejecución: Secuencial vs.\ Ray (32 actores)}
-\label{tab:tiempos}
-\begin{center}
-\begin{tabular}{|r|c|c|}
-\hline
-\textbf{$n$} & \textbf{$T_{seq}$ (s)} & \textbf{$T_{ray}$ (s)} \\
-\hline
-\input{resultados/tabla_tiempos.tex}
-\end{tabular}
-\end{center}
-\end{table}
+La Fig.~\ref{fig:tiempo_tamano} muestra que para $n < 2048$, Ray con
+32 actores es más lento que el secuencial: el overhead fijo de
+inicialización ($\sim$1.2 s) domina completamente. En $n=2048$ Ray
+empata al secuencial ($S = 1.04\times$), y en $n=4096$ lo supera con
+$S = 2.19\times$.
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/tiempo_vs_tamano.pdf}}
-\caption{Tiempo de ejecución (escala log) vs.\ $n$: secuencial vs.\ Ray
-(32 actores, CPU).}
+\caption{Tiempo de ejecución vs.\ $n$ (escala log). Ray solo resulta
+rentable para $n \geq 2048$.}
 \label{fig:tiempo_tamano}
 \end{figure}
 
-\subsection{Speedup y Escalabilidad Fuerte (E1, E2)}
+En escalabilidad fuerte (E2, $n=2048$), el speedup máximo es
+$1.32\times$ con 4--8 actores; agregar más actores \textit{empeora} el
+rendimiento porque el overhead de las $n$ barreras de sincronización
+no decrece con $p$, mientras que el cómputo sí se divide. Con 32
+actores, Ray resulta un 7\% más lento que el secuencial
+(Fig.~\ref{fig:speedup_workers}).
 
-La Tabla~\ref{tab:speedup} muestra speedup y eficiencia para E2
-($n=4096$ fijo, $p$ variable). Las Figs.~\ref{fig:speedup_tamano}
-y~\ref{fig:speedup_workers} ilustran la evolución del speedup con $n$
-y con el número de actores, respectivamente.
-
-\begin{table}[htbp]
-\caption{Speedup y eficiencia paralela: escalabilidad fuerte ($n=4096$)}
-\label{tab:speedup}
-\begin{center}
-\begin{tabular}{|r|r|c|c|r|r|}
-\hline
-\textbf{$n$} & \textbf{$p$} & \textbf{$T_{seq}$} & \textbf{$T_{ray}$} & \textbf{$S(p)$} & \textbf{$E(p)$} \\
-\hline
-\input{resultados/tabla_speedup.tex}
-\end{tabular}
-\end{center}
-\end{table}
+Para $n=4096$ (E5), el speedup crece monotónicamente hasta $2.46\times$
+con 32 actores, aunque la eficiencia cae a $0.08$: cada actor usa
+apenas el 8\% de su capacidad teórica (Fig.~\ref{fig:eficiencia}).
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/speedup_vs_tamano.pdf}}
-\caption{Speedup vs.\ $n$ para distintas cantidades de actores Ray (CPU).}
+\caption{Speedup vs.\ $n$ con 32 actores Ray (E1).}
 \label{fig:speedup_tamano}
 \end{figure}
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/speedup_vs_workers.pdf}}
-\caption{Escalabilidad fuerte ($n=4096$): speedup vs.\ actores. La línea
-discontinua representa el speedup ideal.}
+\caption{Escalabilidad fuerte: speedup vs.\ actores para $n=2048$ (E2)
+y $n=4096$ (E5). Línea discontinua: ideal.}
 \label{fig:speedup_workers}
 \end{figure}
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/eficiencia_vs_workers.pdf}}
-\caption{Eficiencia paralela $E(p) = S(p)/p$ vs.\ actores para $n=4096$
-(E2) y $n=8192$ (E5). La línea horizontal indica eficiencia ideal.}
+\caption{Eficiencia paralela $E(p)=S(p)/p$. Incluso en el mejor caso
+($n=4096$, $p=32$), la eficiencia es solo 0.08.}
 \label{fig:eficiencia}
 \end{figure}
 
-\subsection{Overhead de Ray (E4)}
+\subsection{CPU: overhead y escalabilidad débil (E3, E4)}
 
-\begin{table}[htbp]
-\caption{Overhead de Ray: tiempo total vs.\ secuencial}
-\label{tab:overhead}
-\begin{center}
-\begin{tabular}{|r|r|c|c|r|}
-\hline
-\textbf{$n$} & \textbf{$p$} & \textbf{$T_{\mathrm{comp.}}$} & \textbf{$T_{ov}$} & \textbf{\%} \\
-\hline
-\input{resultados/tabla_overhead.tex}
-\end{tabular}
-\end{center}
-\end{table}
+Para $n \leq 512$, Ray con 1 actor ya es $\sim$10$\times$ más lento
+que el secuencial: el costo de arrancar el clúster Ray ($\sim$1.2 s)
+absorbe todo el tiempo de cómputo.
 
-El overhead acumulado $T_{ov} \approx n \cdot t_{barrera}$ donde
-$t_{barrera}$ es el costo por iteración $k$ de scheduling más
-\textit{object store} más \texttt{ray.get}. La Tabla~\ref{tab:overhead}
-desglosa estos valores para $n \leq 512$.
-
-\subsection{Escalabilidad Débil (E3)}
+En escalabilidad débil (E3), aunque la carga por actor es constante
+($n \propto \sqrt{p}$), el tiempo \textit{aumenta} $5.96\times$ al pasar
+de 1 a 32 actores (Fig.~\ref{fig:escal_debil}). Esto se debe a que las
+$n$ barreras de sincronización crecen con $n$, que a su vez crece con
+$p$: el overhead de comunicación escala con el problema.
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/escalabilidad_debil.pdf}}
-\caption{Escalabilidad débil: tiempo normalizado al caso $p=1$. El
-ideal es la línea horizontal en $y=1$.}
+\caption{Escalabilidad débil: el tiempo normalizado sube $5.96\times$ al
+pasar de 1 a 32 actores, evidenciando que el overhead de sincronización
+escala con $n$.}
 \label{fig:escal_debil}
 \end{figure}
 
-Con carga constante por actor ($n \propto \sqrt{p}$), el tiempo
-normalizado revela la penalización del overhead de $n$ barreras de
-sincronización al crecer $n$, incluso manteniendo el trabajo por actor
-constante.
+\subsection{GPU: segmentada vs.\ básica (E\_GPU, E\_GPU\_seg)}
 
-\subsection{Recursos (E1, E5)}
-
-\begin{table}[htbp]
-\caption{Métricas de recursos por configuración}
-\label{tab:recursos}
-\begin{center}
-\begin{tabular}{|r|c|r|r|r|r|}
-\hline
-\textbf{$n$} & \textbf{Alg.} & \textbf{$p$} & \textbf{CPU\%} & \textbf{RAM (MB)} & \textbf{E (J)} \\
-\hline
-\input{resultados/tabla_recursos.tex}
-\end{tabular}
-\end{center}
-\end{table}
-
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_cpu_ram.pdf}}
-\caption{Utilización de CPU (\%) y RAM pico (MB) por configuración (E1):
-secuencial vs.\ Ray (32 actores).}
-\label{fig:cpu_ram}
-\end{figure}
-
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_energia.pdf}}
-\caption{Energía total consumida (J): izq.\ vs.\ $n$ (E1); der.\ vs.\
-actores para $n=8192$ (E5).}
-\label{fig:energia}
-\end{figure}
-
-\subsection{GPU single: naïve vs.\ bloqueado (E\_GPU, E\_GPU\_blocked)}
-
-La Tabla~\ref{tab:gpu} compara las variantes single-GPU. GPU secuencial
-naïve (CuPy) y GPU bloqueada (RawKernel $B=16$) ejecutan sobre una única
-A4000; la variante GPU+Ray (1 actor) cuantifica el overhead de envolver
-la GPU en un actor Ray.
-
-\begin{table}[htbp]
-\caption{Tiempos GPU single: naïve vs.\ bloqueado vs.\ GPU+Ray (1 actor)}
-\label{tab:gpu}
-\begin{center}
-\begin{tabular}{|r|c|c|c|c|}
-\hline
-\textbf{$n$} & \textbf{GPU-seq (s)} & \textbf{GPU-bloq (s)} & \textbf{GPU-Ray (s)} & \textbf{$S_{bloq}$} \\
-\hline
-\input{resultados/tabla_gpu.tex}
-\end{tabular}
-\end{center}
-\end{table}
+La variante segmentada ($B=16$) supera consistentemente a la básica.
+Para $n \geq 4096$, la aceleración se estabiliza en $6.2\times$
+(Fig.~\ref{fig:gpu_single}). A $n=16384$, la versión básica tarda
+358 s y la segmentada solo 58 s.
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/gpu_single_comparacion.pdf}}
-\caption{Tiempo de ejecución GPU single: naïve vs.\ bloqueado ($B=16$)
-vs.\ GPU+Ray (1 actor). Eje $y$ en escala logarítmica.}
+\caption{Tiempo GPU en una sola GPU (escala log): la variante segmentada
+es $6\times$ más rápida que la básica para $n \geq 4096$.}
 \label{fig:gpu_single}
 \end{figure}
 
-\subsection{Escalabilidad Multi-GPU (E\_GPU\_multi, E\_GPU\_blocked\_multi)}
+La variante GPU+Ray con 1 actor introduce overhead significativo para
+$n$ pequeño: a $n=1024$, usar un actor Ray hace la GPU $8\times$ más
+lenta (1.52 s vs 0.18 s). Para $n \geq 8192$ este overhead es menor
+al 14\% del tiempo total.
+
+\subsection{GPU multi: distribución entre GPUs}
 
 Las Figs.~\ref{fig:gpu_multi_speedup} y~\ref{fig:gpu_blocked_multi}
-muestran el speedup al distribuir el cómputo entre 1, 2 y 3 RTX A4000
-con actores Ray. Para la variante naïve, cada actor recibe la fila $k$
-($O(n)$) por iteración; para la bloqueada, recibe el bloque pivote y la
-fila de bloques ($O(B \cdot n)$) por iteración de bloque.
+muestran el speedup de las variantes multi-GPU respecto a la GPU básica
+en una sola GPU. Los resultados más relevantes son:
+
+\begin{itemize}
+  \item Para $n \leq 2048$, \textbf{ninguna} variante multi-GPU supera
+        a la básica single: el costo de transferir la fila $k$ entre
+        GPUs ($O(n)$ por iteración) domina por completo.
+  \item A $n=8192$ con 3 GPUs: la multi-básica alcanza $S=1.26\times$
+        y la multi-segmentada llega a $S=2.23\times$ respecto a la
+        básica single.
+  \item Sin embargo, la \textbf{segmentada en una sola GPU} ya es
+        $6.2\times$ más rápida que la básica single. Comparada contra
+        ella, la multi-segmentada con 3 GPUs es aún $2.8\times$ más
+        lenta ($20.2$ s vs $7.3$ s a $n=8192$).
+\end{itemize}
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/gpu_multi_speedup.pdf}}
-\caption{Speedup multi-GPU naïve (actores Ray): $S(p)$ vs.\ número de
-GPUs para distintos $n$. Línea discontinua: speedup ideal.}
+\caption{Speedup multi-básica respecto a la GPU básica en una GPU.
+Solo supera $1\times$ para $n \geq 8192$ con $p \geq 2$.}
 \label{fig:gpu_multi_speedup}
 \end{figure}
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/gpu_blocked_multi_speedup.pdf}}
-\caption{Speedup multi-GPU bloqueado ($B=16$): comparación con naïve
-multi-GPU y GPU bloqueada single para $n \in \{2048, 4096, 8192\}$.}
+\caption{Speedup multi-segmentada vs.\ básica single. La
+multi-segmentada mejora sobre la multi-básica, pero no sobre la
+segmentada single.}
 \label{fig:gpu_blocked_multi}
 \end{figure}
+
+\subsection{Consumo de recursos y energía}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_cpu_ram.pdf}}
+\caption{RAM pico del sistema para variantes single-GPU ($n > 2048$).
+Los valores para $n \leq 2048$ son cero por artefacto de muestreo:
+el experimento termina antes del primer \textit{tick} del monitor.}
+\label{fig:cpu_ram}
+\end{figure}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{graficos/consumo_energia.pdf}}
+\caption{Energía total (J): izq.\ vs.\ $n$ para variantes single-GPU;
+der.\ vs.\ número de actores a $n=8192$. A mayor número de GPUs,
+menor tiempo y menor energía total.}
+\label{fig:energia}
+\end{figure}
+
+A $n=8192$, la GPU básica single consume 10\,057 J. La multi-segmentada
+con 3 GPUs consume 5\,066 J (50\% menos), porque termina en menos
+tiempo con una potencia similar. Esta es la única variante multi-GPU
+donde la reducción de energía justifica el hardware adicional.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Discusión}
 \label{sec:discusion}
 
-\subsection{Por qué Ray no acelera Floyd-Warshall en CPU}
+\subsection{Por qué Ray en CPU tiene speedup bajo}
 
-El speedup de Ray está acotado por el modelo de costo:
+El tiempo de Ray se modela como:
 \begin{equation}
 T_{ray}(p,n) \approx \frac{c \cdot n^3}{p} + n \cdot t_{barrera}
 \label{eq:costo}
 \end{equation}
-donde $c$ es la constante de cómputo y $t_{barrera}$ es el overhead fijo
-por iteración $k$ (scheduling + \textit{object store} + \texttt{ray.get}).
-Para que Ray supere al secuencial se requiere
-$T_{ray}(p,n) < T_{seq}(n) = c \cdot n^3$, es decir:
-\begin{equation}
-n^2 > \frac{p \cdot t_{barrera}}{c(p-1)}
-\label{eq:crossover}
-\end{equation}
-El comportamiento anti-escalable para $p$ grande se explica porque el
-término $n \cdot t_{barrera}$ no decrece con $p$, mientras que la ganancia
-de cómputo $c \cdot n^3/p$ satura. Esto difiere de la Ley de Amdahl
-clásica, que supone overhead nulo.
+donde $c$ es el costo de cómputo por operación y $t_{barrera}$ es el
+overhead de Ray por iteración $k$. El segundo término no decrece con
+$p$: agregar actores divide el cómputo pero no la sincronización. Este
+límite se observa claramente en los experimentos: para $n=2048$, el
+speedup máximo es $1.32\times$ con 4--8 actores y luego \textit{cae}
+al aumentar $p$, porque el overhead acumulado supera la ganancia.
 
-\subsection{GPU single: ventaja del acceso bloqueado}
+Para que Ray resulte rentable, el cómputo ($c \cdot n^3/p$) debe
+dominar sobre la sincronización ($n \cdot t_{barrera}$). Experimentalmente,
+ese umbral se sitúa alrededor de $n = 2048$.
 
-El algoritmo bloqueado reduce los accesos a DRAM global en la GPU: por cada
-carga de un tile $B \times B$ desde DRAM, se realizan $B$ iteraciones
-de actualización en shared memory (L1, $\sim$100$\times$ más rápida que
-DRAM). La ganancia teórica es $B$-veces menor presión sobre el bus de
-memoria, verificable en las métricas de bandwidth de la A4000 (384 GB/s
-teórico).
+\subsection{Por qué la versión segmentada es la más eficiente}
 
-\subsection{Multi-GPU: overhead de comunicación inter-GPU}
+El kernel segmentado carga un bloque $16 \times 16$ desde la DRAM de la
+GPU y realiza 16 iteraciones en memoria compartida antes de escribir de
+vuelta. La versión básica, en cambio, accede a DRAM en cada iteración.
+Dado que la memoria compartida de la A4000 tiene latencia $\sim100\times$
+menor que la DRAM global, la variante segmentada reduce los accesos a
+DRAM en un factor $B=16$, lo que explica el $6.2\times$ de aceleración
+obtenido.
 
-La variante multi-GPU naïve transfiere $n$ floats (fila $k$) por iteración
-vía el object store de Ray (GPU$\to$CPU$\to$object store$\to$CPU$\to$GPU).
-Para la A4000 con bandwidth PCIe de $\sim$16 GB/s, el tiempo de
-transferencia de fila $k$ es $8n/16\text{ GB/s}$. Para $n=8192$, esto es
-$\sim 4\, \mu$s de transferencia más el overhead de Ray, contra un tiempo
-de cómputo por iteración de $\sim 2n^2/(\text{FLOPS})$.
+\subsection{Por qué la distribución multi-GPU no supera a la segmentada single}
 
-La variante bloqueada reduce las rondas de comunicación de $n$ a $n/B$,
-con cargas $B \times n$ por ronda (más grandes pero menos frecuentes),
-potencialmente mejorando el balance cómputo/comunicación para $n$ grande.
+El cuello de botella de la variante multi-GPU es la transferencia de la
+fila $k$ en cada iteración: la fila debe viajar por PCIe de GPU a CPU,
+al \textit{object store} de Ray, y de vuelta a cada otra GPU. Para
+$n=8192$, esto ocurre 8\,192 veces. Con un ancho de banda PCIe de
+$\sim$16 GB/s y 64 KB por fila (8192 doubles), cada transferencia tarda
+$\sim$4 $\mu$s más el overhead de Ray, lo que acumula $\sim$33 s en
+total. El cómputo de la segmentada single, en cambio, tarda solo 7.3 s.
 
-\subsection{Amenazas a la Validez}
+La variante multi-segmentada reduce las rondas de comunicación de $n$ a
+$n/B=512$, pero cada ronda transfiere $B \times n = 1$ MB en lugar de
+64 KB. El volumen total es el mismo; la mejora es una menor latencia
+acumulada, lo que explica que la multi-segmentada supere a la
+multi-básica, pero no logre alcanzar a la segmentada single.
 
-\textit{Interna}: jitter del SO y contención en el clúster mitigan con
-Grubbs y múltiples repeticiones. \textit{Externa}: resultados específicos
-a AMD EPYC 9534 y RTX A4000; arquitecturas con mayor bandwidth PCIe o
-NVLink podrían mostrar mejor speedup multi-GPU. \textit{Constructo}: el
-speedup incluye todo el tiempo de reloj (overhead Ray), reflejando el
-beneficio neto para el usuario final.
+La distribución multi-GPU solo sería rentable para matrices que no caben
+en la VRAM de una sola GPU (más de 16 GB en la A4000), o en plataformas
+con NVLink que eliminan el cuello de botella de PCIe.
+
+\subsection{Energía: más GPUs reduce el costo energético}
+
+Aunque la multi-segmentada con 3 GPUs no es la más \textit{rápida}
+comparada con la segmentada single, su consumo a $n=8192$ (5\,066 J)
+es inferior al de todas las variantes básicas. Esto indica que en
+escenarios donde se dispone de múltiples GPUs y la matriz no cabe en
+una sola, la variante multi-segmentada resulta energéticamente
+competitiva.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-Evaluamos seis estrategias de paralelización de \FW{} sobre el clúster
-HPC Patagón. Las conclusiones principales son:
+Se implementaron y evaluaron seis variantes de \FW{} sobre el clúster
+HPC Patagón. Los principales hallazgos son:
 
 \begin{itemize}
-  \item \textbf{Ray en CPU}: el overhead por barrera ($n \cdot t_{barrera}$)
-        limita el speedup para $n$ pequeño. El beneficio aparece únicamente
-        para matrices grandes con un número moderado de actores.
+  \item \textbf{Ray en CPU solo conviene para $n \geq 2048$.} Para
+        matrices más pequeñas, el overhead de sincronización supera
+        cualquier ganancia de paralelismo. El speedup máximo obtenido
+        es $2.46\times$ (32 actores, $n=4096$), con eficiencia del 8\%.
 
-  \item \textbf{GPU single naïve vs.\ bloqueada}: la variante bloqueada
-        con $B=16$ reduce la presión sobre DRAM global al amortizar $B$
-        iteraciones por carga de tile en shared memory, mejorando la
-        eficiencia de caché en la A4000.
+  \item \textbf{La GPU segmentada en una sola GPU es la mejor opción.}
+        Supera a la versión básica en $6.2\times$ para $n \geq 4096$,
+        tardando solo 58 s para $n=16384$ frente a 358 s de la básica.
+        No requiere comunicación entre GPUs ni overhead de Ray.
 
-  \item \textbf{GPU+Ray single}: la coordinación Ray añade overhead
-        por llamada \texttt{remote}+\texttt{ray.get} que domina sobre el
-        cómputo GPU para $n$ pequeño, pero resulta irrelevante para
-        $n \geq 4096$ donde el cómputo domina.
+  \item \textbf{La distribución multi-GPU con Ray no supera a la
+        segmentada single.} La comunicación por PCIe en cada iteración
+        $k$ es demasiado costosa: para $n=8192$, la multi-segmentada
+        con 3 GPUs tarda 20.2 s frente a 7.3 s de la segmentada single.
 
-  \item \textbf{Multi-GPU con Ray}: distribuir las filas entre $p$ GPUs
-        físicas permite escalar el cómputo más allá de la VRAM de una
-        sola GPU, a costa de $n$ transferencias GPU$\to$CPU$\to$GPU por
-        iteración $k$. El speedup depende críticamente del tamaño $n$:
-        para $n$ pequeño domina el overhead de comunicación.
+  \item \textbf{Multi-GPU es energéticamente favorable.} Con 3 GPUs y
+        $n=8192$, la multi-segmentada consume 5\,066 J, un 50\% menos
+        que la básica single (10\,057 J).
 
-  \item \textbf{Multi-GPU bloqueada}: al reducir las rondas de comunicación
-        de $n$ a $n/B$, esta variante mejora el ratio cómputo/comunicación
-        respecto a la naïve multi-GPU, representando la estrategia más
-        completa implementada.
+  \item \textbf{Ray es efectivo como coordinador multi-GPU}, pero el
+        beneficio requiere matrices grandes ($n \geq 8192$) donde el
+        cómputo domine sobre la comunicación inter-GPU.
 \end{itemize}
 
-\textbf{Recomendación}: para $n < 4096$, la GPU single secuencial (CuPy
-naïve o bloqueada) es óptima. Para $n \geq 4096$ con múltiples GPUs
-disponibles, la variante multi-GPU bloqueada ofrece la mejor combinación
-de cómputo eficiente y escalabilidad inter-GPU con Ray como coordinador.
+\textbf{Recomendación práctica:} utilizar la GPU segmentada single para
+cualquier $n$ que quepa en VRAM. Si la matriz supera los 16 GB
+(equivalente a $n \approx 45000$ en float64), la variante
+multi-segmentada con Ray es la alternativa indicada.
 
 El código fuente está disponible en:
 \url{https://github.com/mittods/Floyd-Warshall-Ray}
 
-% ─────────────────────────────────────────────────────────────────────────────
-\section*{Agradecimientos}
+\begin{thebibliography}{1}
 
-Los autores agradecen al Instituto de Informática de la Universidad Austral
-de Chile por el acceso al clúster HPC Patagón.
+\bibitem{mtb90} MTB90, ``cuda-floyd\_warshall,'' GitHub. [En línea].
+Disponible: \url{https://github.com/MTB90/cuda-floyd_warshall}
+
+\bibitem{venkataraman2003} G.\ Venkataraman, S.\ Sahni y S.\ Mukhopadhyaya,
+``A blocked all-pairs shortest-paths algorithm,'' \textit{J.\ Exp.\ Algorithmics},
+vol.\ 8, 2003.
+
+\end{thebibliography}
 
 \end{document}

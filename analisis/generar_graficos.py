@@ -108,40 +108,57 @@ def grafico_speedup_vs_tamano(df: pd.DataFrame) -> None:
 def grafico_speedup_vs_workers(df: pd.DataFrame) -> None:
     """Escalabilidad fuerte: speedup vs. workers.
 
-    Usa E2 (n=1024, todos los workers) y E5 (n=2048, todos los workers).
-    Cada grupo tiene su propio baseline secuencial → sin contaminación.
+    Combina E2 y E5; itera sobre cada n distinto para evitar puntos dobles.
+    El baseline secuencial se busca primero en E5/E2 y luego en E1.
     """
-    grupos_escal = {
-        "E2_escal_fuerte": None,
-        "E5_carga_maxima": None,
-    }
+    def _seq_baseline(n_val):
+        for grupo in ("E5_carga_maxima", "E2_escal_fuerte", "E1_comparacion"):
+            sub = df[(df["grupo"] == grupo) & (df["algoritmo"] == "secuencial") & (df["n"] == n_val)]
+            if not sub.empty:
+                return float(sub["tiempo_media"].iloc[0])
+        return None
+
+    df_ray_all = df[
+        df["grupo"].isin(["E2_escal_fuerte", "E5_carga_maxima"]) &
+        (df["algoritmo"] == "ray_actores")
+    ].copy()
+
+    if df_ray_all.empty:
+        return
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
+    all_speedups = []
 
-    for idx, grupo in enumerate(grupos_escal):
-        df_g = df[df["grupo"] == grupo].copy()
-        if df_g.empty:
+    for ci, n_val in enumerate(sorted(df_ray_all["n"].unique())):
+        t_ref = _seq_baseline(n_val)
+        if t_ref is None:
             continue
-
-        df_seq_g = df_g[df_g["algoritmo"] == "secuencial"]
-        df_ray_g = df_g[df_g["algoritmo"] == "ray_actores"].sort_values("num_actores")
-
-        if df_seq_g.empty or df_ray_g.empty:
+        # Para cada n, usar solo un grupo (E5 > E2) para evitar duplicados
+        sub = pd.DataFrame()
+        for grp in ("E5_carga_maxima", "E2_escal_fuerte"):
+            sub = df_ray_all[(df_ray_all["n"] == n_val) & (df_ray_all["grupo"] == grp)].sort_values("num_actores")
+            if not sub.empty:
+                break
+        if sub.empty:
             continue
+        speedup = t_ref / sub["tiempo_media"]
+        all_speedups.extend(speedup.tolist())
+        ax.plot(sub["num_actores"], speedup.values,
+                marker=MARCADORES[ci % len(MARCADORES)],
+                color=COLORES[ci % len(COLORES)],
+                label=f"$n={n_val}$")
 
-        t_ref = df_seq_g["tiempo_media"].iloc[0]
-        n_val = int(df_ray_g["n"].iloc[0])
-        df_ray_g = df_ray_g.copy()
-        df_ray_g["speedup_limpio"] = t_ref / df_ray_g["tiempo_media"]
+    if not all_speedups:
+        plt.close(fig)
+        return
 
-        ax.plot(
-            df_ray_g["num_actores"], df_ray_g["speedup_limpio"],
-            marker=MARCADORES[idx], color=COLORES[idx], label=f"$n={n_val}$",
-        )
-
-    workers_max = df[df["algoritmo"] == "ray_actores"]["num_actores"].max()
-    w_range = np.array([1, workers_max])
-    ax.plot(w_range, w_range, "k--", linewidth=0.8, label="Ideal")
+    workers_max = int(df_ray_all["num_actores"].max())
+    # Trazar la recta ideal para todo el rango x; el ylim la recortará visualmente
+    ax.plot([1, workers_max], [1, workers_max], "k--", linewidth=0.8, label="Ideal")
+    # Limitar eje y al rango de datos para que la recta ideal no comprima la escala
+    y_top = max(all_speedups) * 1.6
+    y_bot = min(all_speedups) * 0.75
+    ax.set_ylim(bottom=max(y_bot, 0.1), top=y_top)
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log", base=2)
@@ -200,32 +217,52 @@ def grafico_tiempo_vs_tamano(df: pd.DataFrame) -> None:
 
 
 def grafico_eficiencia_paralela(df: pd.DataFrame) -> None:
-    """Eficiencia paralela vs. workers (grupos E2 y E5)."""
+    """Eficiencia paralela vs. workers (grupos E2 y E5).
+
+    Itera sobre cada n distinto para evitar puntos dobles.
+    """
+    def _seq_baseline(n_val):
+        for grupo in ("E5_carga_maxima", "E2_escal_fuerte", "E1_comparacion"):
+            sub = df[(df["grupo"] == grupo) & (df["algoritmo"] == "secuencial") & (df["n"] == n_val)]
+            if not sub.empty:
+                return float(sub["tiempo_media"].iloc[0])
+        return None
+
+    df_ray_all = df[
+        df["grupo"].isin(["E2_escal_fuerte", "E5_carga_maxima"]) &
+        (df["algoritmo"] == "ray_actores")
+    ].copy()
+
+    if df_ray_all.empty:
+        return
+
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
-    for idx, grupo in enumerate(["E2_escal_fuerte", "E5_carga_maxima"]):
-        df_g = df[df["grupo"] == grupo].copy()
-        df_seq_g = df_g[df_g["algoritmo"] == "secuencial"]
-        df_ray_g = df_g[df_g["algoritmo"] == "ray_actores"].sort_values("num_actores")
-
-        if df_seq_g.empty or df_ray_g.empty:
+    for ci, n_val in enumerate(sorted(df_ray_all["n"].unique())):
+        t_ref = _seq_baseline(n_val)
+        if t_ref is None:
             continue
+        # Para cada n, usar solo un grupo (E5 > E2) para evitar duplicados
+        sub = pd.DataFrame()
+        for grp in ("E5_carga_maxima", "E2_escal_fuerte"):
+            sub = df_ray_all[(df_ray_all["n"] == n_val) & (df_ray_all["grupo"] == grp)].sort_values("num_actores")
+            if not sub.empty:
+                break
+        if sub.empty:
+            continue
+        speedup = t_ref / sub["tiempo_media"]
+        eficiencia = speedup / sub["num_actores"]
+        ax.plot(sub["num_actores"], eficiencia.values,
+                marker=MARCADORES[ci % len(MARCADORES)],
+                color=COLORES[ci % len(COLORES)],
+                label=f"$n={n_val}$")
 
-        t_ref = df_seq_g["tiempo_media"].iloc[0]
-        n_val = int(df_ray_g["n"].iloc[0])
-        df_ray_g = df_ray_g.copy()
-        speedup = t_ref / df_ray_g["tiempo_media"]
-        eficiencia = speedup / df_ray_g["num_actores"]
-
-        ax.plot(df_ray_g["num_actores"], eficiencia,
-                marker=MARCADORES[idx], color=COLORES[idx], label=f"$n={n_val}$")
-
-    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=0.8, label="Ideal")
+    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=0.8, label="Ideal ($E=1$)")
     ax.set_xscale("log", base=2)
     ax.set_xlabel("Número de actores")
     ax.set_ylabel("Eficiencia paralela $E(p)$")
     ax.set_title("Eficiencia paralela vs. actores")
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=1.2)
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
@@ -260,53 +297,42 @@ def grafico_escalabilidad_debil(df: pd.DataFrame) -> None:
 
 
 def grafico_recursos(df: pd.DataFrame) -> None:
-    """GPU utilization and peak RAM for single-GPU algorithms (E_GPU, E_GPU_blocked)."""
-    NS = [1024, 2048, 4096, 8192, 16384]
+    """RAM pico del sistema para variantes single-GPU (n > 2048)."""
+    NS = [4096, 8192, 16384]
     series = [
-        ("gpu_secuencial", "GPU naïve",        0),
-        ("gpu_blocked",    "GPU bloqueada",     1),
+        ("gpu_secuencial", "GPU básica",        0),
+        ("gpu_blocked",    "GPU segmentada",    1),
         ("gpu_ray",        "GPU+Ray (1 actor)", 2),
     ]
 
-    col_gpu = "gpu_uso_pct_promedio"
     col_ram = "ram_pico_mb_promedio"
-    if col_gpu not in df.columns or col_ram not in df.columns:
-        logger.warning("Sin métricas de GPU/RAM.")
+    if col_ram not in df.columns:
+        logger.warning("Sin métrica ram_pico_mb_promedio.")
         return
 
-    def _val(alg, n, col, actores=None):
+    def _val(alg, n, actores=None):
         mask = (df["algoritmo"] == alg) & (df["n"] == n)
         if actores is not None:
             mask &= df["num_actores"] == actores
         sub = df[mask]
-        return float(sub[col].iloc[0]) if not sub.empty else 0.0
+        return float(sub[col_ram].iloc[0]) / 1024 if not sub.empty else 0.0
 
     x = np.arange(len(NS))
     width = 0.25
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
     for i, (alg, label, ci) in enumerate(series):
         actores = 1 if alg == "gpu_ray" else None
-        gpu_vals = [_val(alg, n, col_gpu, actores) for n in NS]
-        ram_vals = [_val(alg, n, col_ram, actores) for n in NS]
-        offset = (i - 1) * width
-        ax1.bar(x + offset, gpu_vals, width, label=label, color=COLORES[ci])
-        ax2.bar(x + offset, [v / 1024 for v in ram_vals], width, label=label, color=COLORES[ci])
+        vals = [_val(alg, n, actores) for n in NS]
+        ax.bar(x + (i - 1) * width, vals, width, label=label, color=COLORES[ci])
 
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(NS, rotation=45)
-    ax1.set_xlabel("Tamaño $n$")
-    ax1.set_ylabel("GPU promedio (%)")
-    ax1.set_title("Utilización de GPU")
-    ax1.legend(fontsize=7)
-
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(NS, rotation=45)
-    ax2.set_xlabel("Tamaño $n$")
-    ax2.set_ylabel("RAM pico (GB)")
-    ax2.set_title("Memoria RAM del sistema")
-    ax2.legend(fontsize=7)
-
+    ax.set_xticks(x)
+    ax.set_xticklabels(NS)
+    ax.set_xlabel("Tamaño $n$")
+    ax.set_ylabel("RAM pico (GB)")
+    ax.set_title("Memoria RAM del sistema")
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
     _guardar(fig, "consumo_cpu_ram")
 
@@ -327,8 +353,8 @@ def grafico_energia(df: pd.DataFrame) -> None:
 
     # Panel izquierdo: energía vs n — algoritmos GPU de 1 GPU
     single_series = [
-        ("gpu_secuencial", None,  "GPU naïve",        0),
-        ("gpu_blocked",    None,  "GPU bloqueada",     1),
+        ("gpu_secuencial", None,  "GPU básica",        0),
+        ("gpu_blocked",    None,  "GPU segmentada",    1),
         ("gpu_ray",        1,     "GPU+Ray (1 actor)", 2),
     ]
     for alg, actores, label, ci in single_series:
@@ -357,8 +383,8 @@ def grafico_energia(df: pd.DataFrame) -> None:
     # Panel derecho: energía vs actores para n=8192
     N_REF = 8192
     multi_series = [
-        ("gpu_ray_multi",        "GPU+Ray multi",     1),
-        ("gpu_blocked_multi",    "GPU bloq. multi",   2),
+        ("gpu_ray_multi",        "GPU+Ray multi",    1),
+        ("gpu_blocked_multi",    "GPU seg. multi",   2),
     ]
     for alg, label, ci in multi_series:
         sub = df[(df["algoritmo"] == alg) & (df["n"] == N_REF)].sort_values("num_actores")
@@ -387,9 +413,9 @@ def grafico_gpu_single_comparacion(df: pd.DataFrame) -> None:
     """Tiempo vs n: GPU-seq naïve, GPU-bloqueada y GPU+Ray (1 actor)."""
     NS = [1024, 2048, 4096, 8192, 16384]
     series = [
-        ("gpu_secuencial", "GPU naïve (CuPy)",      0),
-        ("gpu_blocked",    "GPU bloqueada ($B=16$)", 1),
-        ("gpu_ray",        "GPU+Ray (1 actor)",      2),
+        ("gpu_secuencial", "GPU básica (CuPy)",       0),
+        ("gpu_blocked",    "GPU segmentada ($B=16$)", 1),
+        ("gpu_ray",        "GPU+Ray (1 actor)",       2),
     ]
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
@@ -416,7 +442,7 @@ def grafico_gpu_single_comparacion(df: pd.DataFrame) -> None:
     ax.set_yscale("log")
     ax.set_xlabel("Tamaño de matriz $n$")
     ax.set_ylabel("Tiempo de ejecución (s)")
-    ax.set_title("GPU single: naïve vs. bloqueado vs. +Ray")
+    ax.set_title("GPU single: básica vs. segmentada vs. +Ray")
     ax.legend(fontsize=7)
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
@@ -448,7 +474,7 @@ def grafico_gpu_multi_speedup(df: pd.DataFrame) -> None:
     ax.plot([1, 3], [1, 3], "k--", linewidth=0.8, label="Ideal")
     ax.set_xlabel("GPUs (actores Ray)")
     ax.set_ylabel("Speedup $S(p)$")
-    ax.set_title("Escalabilidad multi-GPU naïve")
+    ax.set_title("Escalabilidad multi-GPU básica")
     ax.set_xticks([1, 2, 3])
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -464,8 +490,8 @@ def grafico_gpu_blocked_multi_speedup(df: pd.DataFrame) -> None:
 
     for ci, n in enumerate(NS):
         for alg, estilo, etiq in [
-            ("gpu_ray_multi",     "-",  "naïve"),
-            ("gpu_blocked_multi", "--", "bloq."),
+            ("gpu_ray_multi",     "-",  "básica"),
+            ("gpu_blocked_multi", "--", "seg."),
         ]:
             sub = df[(df["algoritmo"] == alg) & (df["n"] == n)].sort_values("num_actores")
             ref = sub[sub["num_actores"] == 1]
@@ -486,7 +512,7 @@ def grafico_gpu_blocked_multi_speedup(df: pd.DataFrame) -> None:
     ax.plot([1, 3], [1, 3], "k:", linewidth=0.8, label="Ideal")
     ax.set_xlabel("GPUs (actores Ray)")
     ax.set_ylabel("Speedup $S(p)$")
-    ax.set_title("Multi-GPU: naïve (—) vs. bloqueado (- -)")
+    ax.set_title("Multi-GPU: básica (—) vs. segmentada (- -)")
     ax.set_xticks([1, 2, 3])
     ax.legend(fontsize=7, ncol=2)
     ax.grid(True, alpha=0.3)

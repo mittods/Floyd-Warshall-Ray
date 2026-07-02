@@ -58,5 +58,14 @@ ray_results/
 .DS_Store
 Thumbs.db
 
+# Directorios externos (no forman parte del proyecto)
+cuda-floyd_warshall-master/
+cuda-floyd_warshall-master.zip
+ray-ejemplos/
+manual/
+
+# Archivos de planificación interna
 METODOLOGIA_RAZONADA.md
+
+# Archivos fuente del artículo (no publicados en el repo)
 ray.tex

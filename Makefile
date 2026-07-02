@@ -102,6 +102,11 @@ docker-benchmark-gpu:
 	@echo "$(BOLD)Ejecutando benchmarks GPU en Docker (requiere nvidia-container-toolkit)...$(RESET)"
 	docker compose --profile gpu run --rm benchmark-gpu make benchmark
 
+.PHONY: docker-test
+docker-test:
+	@echo "$(BOLD)Ejecutando test de humo Docker...$(RESET)"
+	@bash scripts/test_docker.sh floyd-warshall-ray:local
+
 # ── Ejecución de benchmarks ──────────────────────────────────────────────────
 .PHONY: benchmark
 benchmark:

@@ -1,193 +1,195 @@
 # Floyd-Warshall con Ray
 
-Entorno experimental para evaluar la paralelización del algoritmo
-Floyd-Warshall mediante el framework Ray sobre hardware HPC.
+Entorno experimental para el artículo IEEE:
 
-[![Build and Publish Docker](https://github.com/martinmaza/floyd-warshall-ray/actions/workflows/docker.yml/badge.svg)](https://github.com/martinmaza/floyd-warshall-ray/actions/workflows/docker.yml)
-[![Docker Image](https://ghcr.io/martinmaza/floyd-warshall-ray:latest)](https://github.com/martinmaza/floyd-warshall-ray/pkgs/container/floyd-warshall-ray)
+> **"Paralelización del Algoritmo Floyd-Warshall mediante Ray:
+> Análisis de Rendimiento y Escalabilidad en Hardware HPC"**
+>
+> Martín Maza — Instituto de Informática, Universidad Austral de Chile
 
----
-
-## Descripción
-
-Este repositorio contiene el entorno experimental completo para el artículo
-científico:
-
-> **"Paralelización del Algoritmo Floyd-Warshall mediante Ray: Análisis de
-> Rendimiento y Escalabilidad en Hardware de Alto Rendimiento"**
-
-El objetivo es responder experimentalmente:
-
-- ¿Cuánto acelera Ray la ejecución de Floyd-Warshall?
-- ¿Cuál es el speedup y la eficiencia paralela obtenidos?
-- ¿Cuál es el overhead real de Ray y desde qué tamaño es rentable?
-- ¿Cómo escala con el número de workers y el tamaño de la matriz?
-- ¿Cuál es el impacto en consumo de CPU, memoria y energía?
+[![Docker Build](https://github.com/mittods/Floyd-Warshall-Ray/actions/workflows/docker.yml/badge.svg)](https://github.com/mittods/Floyd-Warshall-Ray/actions/workflows/docker.yml)
 
 ---
 
-## Inicio rápido
+## Requisitos
 
-### Con Docker (recomendado)
+- [Docker](https://docs.docker.com/get-docker/) ≥ 24
+- [Docker Compose](https://docs.docker.com/compose/install/) v2 (incluido en Docker Desktop)
+- *(solo para experimentos GPU)* [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) + driver NVIDIA ≥ 525
+
+---
+
+## Inicio rápido con Docker
 
 ```bash
-# 1. Clonar el repositorio
-git clone https://github.com/martinmaza/floyd-warshall-ray.git
-cd floyd-warshall-ray
+git clone https://github.com/mittods/Floyd-Warshall-Ray.git
+cd Floyd-Warshall-Ray
 
-# 2. Descargar la imagen publicada
-docker pull ghcr.io/martinmaza/floyd-warshall-ray:latest
+# Construir la imagen localmente
+make docker-build
 
-# 3. Ejecutar benchmarks completos
-docker-compose run --rm benchmark make benchmark
-
-# 4. Generar tablas y gráficos
-docker-compose run --rm benchmark make analisis
+# Verificar que todo funciona (test de humo, ~1 min)
+make docker-test
 ```
 
-### Sin Docker
+La imagen también está disponible en GHCR:
 
 ```bash
-git clone https://github.com/martinmaza/floyd-warshall-ray.git
-cd floyd-warshall-ray
-python -m venv .venv && source .venv/bin/activate
-make instalar
-make validar
-make benchmark
+docker pull ghcr.io/mittods/floyd-warshall-ray:latest
 ```
 
 ---
 
-## Estructura del proyecto
+## Despliegue con Docker
+
+### Experimentos CPU
+
+```bash
+# Benchmark completo con parámetros por defecto (n=256..2048, workers=1..32)
+docker compose run --rm benchmark make benchmark
+
+# Parámetros personalizados
+FW_TAMANOS="128,256,512" FW_WORKERS="1,2,4" FW_REPETICIONES=3 \
+  docker compose run --rm benchmark make benchmark
+
+# Shell interactivo
+docker compose run --rm benchmark bash
+```
+
+### Experimentos GPU
+
+Requiere `nvidia-container-toolkit` instalado en el host.
+
+```bash
+# Benchmark GPU (variantes básica, segmentada y multi-GPU)
+docker compose --profile gpu run --rm benchmark-gpu \
+  python -m experimentos.ejecutar_benchmarks \
+    --escenarios E_GPU E_GPU_blocked E_GPU_multi E_GPU_blocked_multi
+
+# Shell interactivo con GPU
+docker compose --profile gpu run --rm benchmark-gpu bash
+```
+
+### Análisis (gráficos y tablas)
+
+Los resultados se generan en `./resultados/` y los gráficos en `./graficos/`
+mediante volúmenes montados.
+
+```bash
+docker compose run --rm analisis
+```
+
+O manualmente desde un shell:
+
+```bash
+docker compose run --rm benchmark bash -c "
+  python -m analisis.generar_graficos &&
+  python -m analisis.generar_tablas
+"
+```
+
+### Test de humo
+
+Verifica que la imagen está correctamente configurada sin necesitar GPU:
+
+```bash
+bash scripts/test_docker.sh                              # imagen local
+bash scripts/test_docker.sh ghcr.io/mittods/floyd-warshall-ray:latest
+```
+
+El test ejecuta el benchmark CPU con `n=128` y 1 repetición (~30 s) y
+comprueba que `resultados/resultados_agregados.json` se genera correctamente.
+
+---
+
+## Variables de entorno
+
+| Variable | Por defecto | Descripción |
+|---|---|---|
+| `FW_TAMANOS` | `256,512,1024,2048` | Tamaños de matriz n separados por coma |
+| `FW_WORKERS` | `1,2,4,8,16,32` | Número de actores Ray |
+| `FW_REPETICIONES` | `5` | Repeticiones por configuración |
+| `FW_SEMILLA` | `42` | Semilla para matrices aleatorias |
+| `FW_DENSIDAD` | `0.7` | Densidad del grafo (fracción de aristas) |
+
+---
+
+## Estructura del repositorio
 
 ```
 Floyd-Warshall-Ray/
 ├── src/
-│   ├── secuencial/              # Implementación secuencial (línea base)
-│   │   └── floyd_warshall_secuencial.py
-│   ├── ray_parallel/            # Implementación paralela con actores Ray
-│   │   └── floyd_warshall_ray.py
-│   └── utils/                   # Métricas, monitor del sistema, exportador
-│       ├── metricas.py
-│       ├── monitor.py
-│       └── exportador.py
+│   ├── secuencial/          # Implementación CPU secuencial (línea base)
+│   ├── ray_parallel/        # Floyd-Warshall paralelo con actores Ray (CPU)
+│   ├── gpu/                 # Variantes GPU: básica (CuPy), segmentada, multi-GPU
+│   └── utils/               # Monitor de recursos, métricas, exportador JSON
 ├── experimentos/
-│   ├── config.py                # Parámetros configurables del experimento
-│   ├── escenarios.py            # Definición de los 5 grupos de escenarios
-│   └── ejecutar_benchmarks.py  # Script principal de ejecución
+│   ├── config.py            # Parámetros globales del experimento
+│   ├── escenarios.py        # Definición de los grupos E1–E5 y E_GPU*
+│   └── ejecutar_benchmarks.py
 ├── analisis/
-│   ├── generar_tablas.py        # Tablas LaTeX desde resultados
-│   └── generar_graficos.py      # Gráficos PDF/PNG desde resultados
-├── scripts/                     # Scripts de automatización
-├── docker/                      # Dockerfile y entrypoint
-├── .github/workflows/           # CI/CD: build y publish en GHCR
-├── resultados/                  # Resultados JSON/CSV/Parquet (generados)
-├── graficos/                    # Figuras PDF/PNG (generadas)
-├── manual/                      # Manual de reproducción
-├── ray-ejemplos/                # Ejemplos de clase (referencia)
-├── ray.tex                      # Artículo científico IEEE
-├── METODOLOGIA_RAZONADA.md      # Razonamiento metodológico detallado
+│   ├── generar_graficos.py  # Figuras PDF/PNG para el artículo
+│   └── generar_tablas.py    # Tablas LaTeX
+├── scripts/
+│   ├── test_docker.sh       # Test de humo Docker
+│   └── patagon/             # Scripts SLURM para el clúster Patagón
+├── docker/
+│   ├── Dockerfile
+│   └── entrypoint.sh
+├── .github/workflows/
+│   └── docker.yml           # CI: build y publish en GHCR
 ├── docker-compose.yml
 ├── requirements.txt
-└── Makefile
+├── Makefile
+└── IEEEtran.cls
 ```
 
 ---
 
-## Imagen Docker
-
-La imagen se publica automáticamente en GHCR con cada push a `main`.
-
-```bash
-# Última versión
-docker pull ghcr.io/martinmaza/floyd-warshall-ray:latest
-
-# Versión específica del artículo
-docker pull ghcr.io/martinmaza/floyd-warshall-ray:v1.0
-
-# Commit específico (hash de 7 chars)
-docker pull ghcr.io/martinmaza/floyd-warshall-ray:abc1234
-```
-
-### Autenticación en GHCR
-
-```bash
-echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USER --password-stdin
-```
-
----
-
-## Comandos disponibles
-
-```
-make ayuda            Ver todos los comandos
-make benchmark        Ejecutar todos los experimentos
-make secuencial       Solo versión secuencial
-make ray              Solo versión con Ray
-make tablas           Generar tablas LaTeX
-make graficos         Generar gráficos
-make analisis         Tablas + gráficos
-make latex            Compilar artículo PDF
-make articulo         analisis + latex (pipeline completo)
-make validar          Verificar entorno
-make docker-build     Construir imagen localmente
-make docker-pull      Descargar imagen de GHCR
-make exportar         Comprimir resultados
-make limpiar          Eliminar resultados generados
-```
-
----
-
-## Hardware utilizado en el artículo
+## Hardware utilizado (clúster Patagón, UACh)
 
 | Componente | Especificación |
 |---|---|
-| CPU | AMD Ryzen Threadripper PRO 5975WX (32c/64t) |
-| RAM | 128 GB DDR4-3200 MHz |
-| SSD | 2 TB NVMe |
-| GPU | NVIDIA TITAN V 12 GB HBM2 |
-| OS | Linux (kernel 7.x) |
+| CPU | AMD EPYC 9534 (64 cores) |
+| RAM | 384 GB DDR5 |
+| GPU | 3 × NVIDIA RTX A4000 16 GB |
+| Red | InfiniBand HDR 200 Gb/s |
+| Scheduler | SLURM 23.x |
 
 ---
 
-## Configuración del experimento
+## Comandos Make
 
-| Parámetro | Valores |
-|---|---|
-| Tamaños de matriz (n) | 64, 128, 256, 512, 1024, 2048, 4096 |
-| Número de actores Ray | 1, 2, 4, 8, 16, 32 |
-| Repeticiones | 10 (con test de Grubbs α=0.05) |
-| IC | 95% (distribución t de Student) |
-| Semilla base | 42 |
-| Densidad de grafo | 0.7 |
-
----
-
-## Documentación adicional
-
-- [Manual de reproducción completo](manual/MANUAL_REPRODUCCION.md)
-- [Razonamiento metodológico](METODOLOGIA_RAZONADA.md)
-- [Ejemplos de Ray (referencia)](ray-ejemplos/)
-
----
-
-## Cita
-
-Si utiliza este entorno experimental en su investigación, por favor cite:
-
-```bibtex
-@inproceedings{autor2026fw,
-  title     = {Paralelización del Algoritmo Floyd-Warshall mediante Ray:
-               Análisis de Rendimiento y Escalabilidad en Hardware de Alto Rendimiento},
-  author    = {[AUTORES]},
-  booktitle = {[CONFERENCIA]},
-  year      = {2026},
-  note      = {Código disponible en \url{https://github.com/martinmaza/floyd-warshall-ray}}
-}
+```
+make docker-build        Construir imagen Docker localmente
+make docker-test         Test de humo (CPU, ~1 min)
+make docker-shell        Shell interactivo (CPU)
+make docker-shell-gpu    Shell interactivo (GPU)
+make docker-benchmark    Benchmark CPU completo en Docker
+make docker-benchmark-gpu  Benchmark GPU en Docker
+make benchmark           Benchmark local (sin Docker)
+make analisis            Generar gráficos y tablas
+make limpiar             Eliminar resultados generados
+make ayuda               Ver todos los comandos
 ```
 
 ---
 
-## Licencia
+## Reproducción de los experimentos del artículo
 
-MIT
+Los resultados del artículo se obtuvieron ejecutando los scripts SLURM
+en el clúster Patagón de la UACh:
+
+```bash
+# GPU (3× A4000) — escenarios E_GPU*
+sbatch scripts/patagon/submit_ai.sbatch
+
+# CPU (32 cores) — escenarios E1–E5
+sbatch scripts/patagon/submit_cpu.sbatch
+```
+
+Los archivos `resultados/raw_*.json` no se incluyen en el repositorio
+por su tamaño. El archivo `resultados/resultados_agregados.json` con
+los estadísticos finales está disponible en los
+[releases del repositorio](https://github.com/mittods/Floyd-Warshall-Ray/releases).
+
