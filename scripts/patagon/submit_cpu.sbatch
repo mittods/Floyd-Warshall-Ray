@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=fw-ray-cpu
-#SBATCH --partition=cpu
+#SBATCH --partition=AI
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00
