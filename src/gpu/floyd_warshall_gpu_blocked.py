@@ -24,7 +24,7 @@ Ventaja frente al kernel naïve:
     iteraciones por carga.
 
 BLOCK_SIZE = 16 → tile float64 ocupa 16×16×8 = 2 KB en shared memory.
-La TITAN V tiene 48 KB por SM, con margen para múltiples bloques activos.
+La A4000 tiene 48 KB por SM, con margen para múltiples bloques activos.
 """
 import logging
 import time
@@ -39,7 +39,7 @@ BLOCK_SIZE = 16
 # ── Código fuente de los tres kernels CUDA ───────────────────────────────────
 _KERNEL_SRC = f"""
 #define B {BLOCK_SIZE}
-#define INF INFINITY
+#define INF __longlong_as_double(0x7ff0000000000000LL)
 
 // ── Phase 1: bloque pivote (auto-dependiente) ────────────────────────────────
 // Grid (1,1) · Block (B,B)
