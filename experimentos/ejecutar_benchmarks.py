@@ -279,6 +279,11 @@ def main() -> None:
         action="store_true",
         help="Mostrar escenarios a ejecutar sin ejecutarlos",
     )
+    parser.add_argument(
+        "--precargar",
+        action="store_true",
+        help="Cargar resultados_agregados.json existente antes de empezar (para añadir nuevos n sin re-ejecutar los anteriores)",
+    )
     args = parser.parse_args()
 
     config = CONFIGURACION_DEFAULT
@@ -344,9 +349,22 @@ def main() -> None:
             # CUDA disponible en el cluster aunque no en el proceso local
             hay_gpu = True
 
-    # Ejecutar todos los escenarios
+    # Precargar resultados existentes (modo --precargar)
     todos_registros: list = []
     todos_agregados: list = []
+    if args.precargar:
+        archivo_previo = config.dir_resultados / "resultados_agregados.json"
+        if archivo_previo.exists():
+            import json as _json
+            with open(archivo_previo, encoding="utf-8") as _f:
+                prev = _json.load(_f)
+            if isinstance(prev, list):
+                todos_agregados.extend(prev)
+                logger.info(
+                    "Precargados %d escenarios previos desde %s",
+                    len(prev), archivo_previo,
+                )
+
     t_inicio_total = time.time()
 
     for i, escenario in enumerate(escenarios):

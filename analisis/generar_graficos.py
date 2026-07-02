@@ -260,108 +260,122 @@ def grafico_escalabilidad_debil(df: pd.DataFrame) -> None:
 
 
 def grafico_recursos(df: pd.DataFrame) -> None:
-    """CPU% promedio y RAM pico (grupo E1)."""
-    df_e1 = df[df["grupo"] == "E1_comparacion"].copy()
-    df_seq = df_e1[df_e1["algoritmo"] == "secuencial"].sort_values("n")
-    df_ray = df_e1[df_e1["algoritmo"] == "ray_actores"].sort_values("n")
+    """GPU utilization and peak RAM for single-GPU algorithms (E_GPU, E_GPU_blocked)."""
+    NS = [1024, 2048, 4096, 8192]
+    series = [
+        ("gpu_secuencial", "GPU naïve",        0),
+        ("gpu_blocked",    "GPU bloqueada",     1),
+        ("gpu_ray",        "GPU+Ray (1 actor)", 2),
+    ]
 
-    if df_seq.empty or "cpu_uso_promedio_pct_promedio" not in df_seq.columns:
-        logger.warning("Sin métricas de recursos en E1.")
+    col_gpu = "gpu_uso_pct_promedio"
+    col_ram = "ram_pico_mb_promedio"
+    if col_gpu not in df.columns or col_ram not in df.columns:
+        logger.warning("Sin métricas de GPU/RAM.")
         return
 
-    tamanos = sorted(df_seq["n"].unique())
-    x = np.arange(len(tamanos))
-    width = 0.35
-    w_label = int(df_ray["num_actores"].iloc[0]) if not df_ray.empty else "?"
+    def _val(alg, n, col, actores=None):
+        mask = (df["algoritmo"] == alg) & (df["n"] == n)
+        if actores is not None:
+            mask &= df["num_actores"] == actores
+        sub = df[mask]
+        return float(sub[col].iloc[0]) if not sub.empty else 0.0
 
-    def _val(subdf, n, col):
-        row = subdf[subdf["n"] == n]
-        return float(row[col].iloc[0]) if not row.empty else 0.0
-
-    cpu_seq = [_val(df_seq, n, "cpu_uso_promedio_pct_promedio") for n in tamanos]
-    cpu_ray = [_val(df_ray, n, "cpu_uso_promedio_pct_promedio") for n in tamanos]
-    ram_seq = [_val(df_seq, n, "ram_pico_mb_promedio") for n in tamanos]
-    ram_ray = [_val(df_ray, n, "ram_pico_mb_promedio") for n in tamanos]
-
+    x = np.arange(len(NS))
+    width = 0.25
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
 
-    ax1.bar(x - width/2, cpu_seq, width, label="Secuencial", color=COLORES[0])
-    ax1.bar(x + width/2, cpu_ray, width, label=f"Ray ({w_label}w)", color=COLORES[1])
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(tamanos, rotation=45)
-    ax1.set_xlabel("Tamaño $n$")
-    ax1.set_ylabel("CPU promedio (%)")
-    ax1.set_title("Utilización de CPU")
-    ax1.legend()
+    for i, (alg, label, ci) in enumerate(series):
+        actores = 1 if alg == "gpu_ray" else None
+        gpu_vals = [_val(alg, n, col_gpu, actores) for n in NS]
+        ram_vals = [_val(alg, n, col_ram, actores) for n in NS]
+        offset = (i - 1) * width
+        ax1.bar(x + offset, gpu_vals, width, label=label, color=COLORES[ci])
+        ax2.bar(x + offset, [v / 1024 for v in ram_vals], width, label=label, color=COLORES[ci])
 
-    ax2.bar(x - width/2, ram_seq, width, label="Secuencial", color=COLORES[0])
-    ax2.bar(x + width/2, ram_ray, width, label=f"Ray ({w_label}w)", color=COLORES[1])
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(NS, rotation=45)
+    ax1.set_xlabel("Tamaño $n$")
+    ax1.set_ylabel("GPU promedio (%)")
+    ax1.set_title("Utilización de GPU")
+    ax1.legend(fontsize=7)
+
     ax2.set_xticks(x)
-    ax2.set_xticklabels(tamanos, rotation=45)
+    ax2.set_xticklabels(NS, rotation=45)
     ax2.set_xlabel("Tamaño $n$")
-    ax2.set_ylabel("RAM pico (MB)")
-    ax2.set_title("Consumo de memoria RAM")
-    ax2.legend()
+    ax2.set_ylabel("RAM pico (GB)")
+    ax2.set_title("Memoria RAM del sistema")
+    ax2.legend(fontsize=7)
 
     plt.tight_layout()
     _guardar(fig, "consumo_cpu_ram")
 
 
 def grafico_energia(df: pd.DataFrame) -> None:
-    """Energía total consumida (J) por configuración.
+    """Energía total consumida (J).
 
-    Paneles:
-      Izq: energía vs n para seq y Ray-32w (grupo E1)
-      Der: energía vs workers para n=2048 (grupo E5)
+    Izq: energía vs n para gpu_secuencial, gpu_blocked, gpu_ray (1 actor).
+    Der: energía vs actores para gpu_ray_multi y gpu_blocked_multi (n=8192).
     """
-    df_e1 = df[df["grupo"] == "E1_comparacion"].copy()
-    df_e5 = df[df["grupo"] == "E5_carga_maxima"].copy()
-
     col = "energia_total_j_promedio"
     if col not in df.columns:
         logger.warning("Columna '%s' no encontrada.", col)
         return
 
+    NS = [1024, 2048, 4096, 8192]
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.6))
 
-    # Panel izquierdo: energía vs n (E1)
-    df_seq_e1 = df_e1[df_e1["algoritmo"] == "secuencial"].sort_values("n")
-    df_ray_e1 = df_e1[df_e1["algoritmo"] == "ray_actores"].sort_values("n")
-
-    if not df_seq_e1.empty:
-        ax1.plot(df_seq_e1["n"], df_seq_e1[col],
-                 marker="o", color=COLORES[0], label="Secuencial")
-    if not df_ray_e1.empty:
-        w = int(df_ray_e1["num_actores"].iloc[0])
-        ax1.plot(df_ray_e1["n"], df_ray_e1[col],
-                 marker="s", color=COLORES[1], label=f"Ray ({w}w)")
+    # Panel izquierdo: energía vs n — algoritmos GPU de 1 GPU
+    single_series = [
+        ("gpu_secuencial", None,  "GPU naïve",        0),
+        ("gpu_blocked",    None,  "GPU bloqueada",     1),
+        ("gpu_ray",        1,     "GPU+Ray (1 actor)", 2),
+    ]
+    for alg, actores, label, ci in single_series:
+        vals = []
+        ns_vals = []
+        for n in NS:
+            mask = (df["algoritmo"] == alg) & (df["n"] == n)
+            if actores is not None:
+                mask &= df["num_actores"] == actores
+            sub = df[mask]
+            if not sub.empty:
+                vals.append(float(sub[col].iloc[0]))
+                ns_vals.append(n)
+        if vals:
+            ax1.plot(ns_vals, vals, marker="o", color=COLORES[ci], label=label)
 
     ax1.set_xscale("log", base=2)
     ax1.set_yscale("log")
     ax1.set_xlabel("Tamaño $n$")
     ax1.set_ylabel("Energía (J)")
     ax1.set_title("Energía vs. tamaño de matriz")
-    ax1.legend()
+    ax1.legend(fontsize=7)
     ax1.grid(True, alpha=0.3)
     ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
 
-    # Panel derecho: energía vs workers para n=2048 (E5)
-    df_seq_e5 = df_e5[df_e5["algoritmo"] == "secuencial"]
-    df_ray_e5 = df_e5[df_e5["algoritmo"] == "ray_actores"].sort_values("num_actores")
+    # Panel derecho: energía vs actores para n=8192
+    N_REF = 8192
+    multi_series = [
+        ("gpu_ray_multi",        "GPU+Ray multi",     1),
+        ("gpu_blocked_multi",    "GPU bloq. multi",   2),
+    ]
+    for alg, label, ci in multi_series:
+        sub = df[(df["algoritmo"] == alg) & (df["n"] == N_REF)].sort_values("num_actores")
+        if not sub.empty:
+            ax2.plot(sub["num_actores"], sub[col], marker="o", color=COLORES[ci], label=label)
 
-    if not df_ray_e5.empty:
-        ax2.plot(df_ray_e5["num_actores"], df_ray_e5[col],
-                 marker="o", color=COLORES[1], label="Ray ($n=2048$)")
-        if not df_seq_e5.empty:
-            e_seq = float(df_seq_e5[col].iloc[0])
-            ax2.axhline(y=e_seq, color=COLORES[0], linestyle="--",
-                        linewidth=0.9, label=f"Secuencial ({e_seq:.0f} J)")
+    # baseline: gpu_secuencial n=8192
+    base = df[(df["algoritmo"] == "gpu_secuencial") & (df["n"] == N_REF)]
+    if not base.empty:
+        e_base = float(base[col].iloc[0])
+        ax2.axhline(y=e_base, color=COLORES[0], linestyle="--",
+                    linewidth=0.9, label=f"GPU naïve ({e_base/1000:.1f} kJ)")
 
-    ax2.set_xscale("log", base=2)
-    ax2.set_xlabel("Número de actores")
+    ax2.set_xlabel("Número de actores (GPUs)")
     ax2.set_ylabel("Energía (J)")
-    ax2.set_title("Energía vs. actores ($n=2048$)")
-    ax2.legend()
+    ax2.set_title(f"Energía vs. actores ($n={N_REF}$)")
+    ax2.legend(fontsize=7)
     ax2.grid(True, alpha=0.3)
     ax2.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{int(x)}"))
 

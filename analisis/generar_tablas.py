@@ -168,8 +168,11 @@ def generar_tabla_recursos(df: pd.DataFrame, ruta_salida: Path) -> None:
             "secuencial": "CPU Sec.",
             "ray_actores": "CPU Ray",
             "gpu_secuencial": "GPU Sec.",
+            "gpu_blocked": "GPU Bloq.",
+            "gpu_blocked_multi": "GPU Bloq.+Ray",
             "gpu_ray": "GPU Ray",
-        }.get(algoritmo, algoritmo)
+            "gpu_ray_multi": "GPU Ray Multi",
+        }.get(algoritmo, algoritmo.replace("_", r"\_"))
         actores = fila.get("num_actores", 0)
         w = "--" if pd.isna(actores) or actores == 0 else str(int(actores))
         cpu_pct = fila.get("cpu_uso_promedio_pct_promedio", 0)
