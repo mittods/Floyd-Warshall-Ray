@@ -155,7 +155,7 @@ def generar_tabla_recursos(df: pd.DataFrame, ruta_salida: Path) -> None:
     """
     Tabla de métricas de recursos: CPU, RAM, energía.
 
-    Columnas: n | Alg. | Workers | CPU% prom | RAM pico (MB) | E_total (J)
+    Columnas: n | Alg. | Workers | CPU% prom | RAM pico proceso (MB) | E_total (J)
     """
     filas_tex = []
 
@@ -176,7 +176,7 @@ def generar_tabla_recursos(df: pd.DataFrame, ruta_salida: Path) -> None:
         actores = fila.get("num_actores", 0)
         w = "--" if pd.isna(actores) or actores == 0 else str(int(actores))
         cpu_pct = fila.get("cpu_uso_promedio_pct_promedio", 0)
-        ram_mb = fila.get("ram_pico_mb_promedio", 0)
+        ram_mb = fila.get("ram_proceso_pico_mb_promedio", 0)
         energia_j = fila.get("energia_total_j_promedio", 0)
 
         linea = (
@@ -257,6 +257,7 @@ def main() -> None:
     # Filtrar solo filas con datos válidos y normalizar NaN en recursos
     df = df[df["tiempo_media"].notna()].copy()
     for col in ["cpu_uso_promedio_pct_promedio", "ram_pico_mb_promedio",
+                "ram_proceso_pico_mb_promedio",
                 "gpu_uso_pct_promedio", "energia_total_j_promedio"]:
         if col in df.columns:
             df[col] = df[col].fillna(0.0)

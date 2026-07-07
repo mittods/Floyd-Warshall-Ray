@@ -74,8 +74,14 @@ validar:
 # ── Docker ───────────────────────────────────────────────────────────────────
 .PHONY: docker-build
 docker-build:
-	@echo "$(BOLD)Construyendo imagen Docker localmente...$(RESET)"
-	bash scripts/construir_docker.sh floyd-warshall-ray:local
+	@echo "$(BOLD)Construyendo imagen CPU (sin CUDA)...$(RESET)"
+	docker build --target cpu -t floyd-warshall-ray:cpu -f docker/Dockerfile .
+	@echo "$(GREEN)Imagen floyd-warshall-ray:cpu lista.$(RESET)"
+
+.PHONY: docker-build-gpu
+docker-build-gpu:
+	@echo "$(BOLD)Construyendo imagen GPU (con CuPy/CUDA, tarda ~10 min)...$(RESET)"
+	docker build --target gpu -t floyd-warshall-ray:gpu -f docker/Dockerfile .
 
 .PHONY: docker-pull
 docker-pull:

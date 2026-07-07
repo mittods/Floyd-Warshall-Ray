@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-IMAGE="${1:-floyd-warshall-ray:local}"
+IMAGE="${1:-floyd-warshall-ray:cpu}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 

@@ -43,25 +43,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Etapa de dependencias Python ────────────────────────────────────────────
-FROM base AS deps
+# ── Etapa CPU: dependencias sin CUDA (test local / CI sin GPU) ──────────────
+FROM base AS cpu
 
 WORKDIR /app
-
-COPY requirements.txt .
-
+COPY requirements-cpu.txt .
 RUN pip install --upgrade pip setuptools wheel && \
-    pip install numpy>=1.26.0 && \
-    pip install -r requirements.txt
-
-# ── Etapa final ──────────────────────────────────────────────────────────────
-FROM deps AS final
-
-WORKDIR /app
+    pip install -r requirements-cpu.txt
 
 RUN mkdir -p resultados graficos metricas datasets logs \
     && chmod -R 777 resultados graficos metricas datasets logs
-
 RUN groupadd -r investigador && useradd -r -m -g investigador investigador && \
     chown -R investigador:investigador /app
 
@@ -71,11 +62,8 @@ COPY --chown=investigador:investigador analisis/ ./analisis/
 COPY --chown=investigador:investigador scripts/ ./scripts/
 COPY --chown=investigador:investigador Makefile ./Makefile
 COPY --chown=investigador:investigador docker/entrypoint.sh ./entrypoint.sh
-
 RUN chmod +x scripts/*.sh entrypoint.sh
 
-# Valores conservadores para uso local.
-# En Patagon se sobreescriben con FW_TAMANOS="1024,2048,4096,8192" y FW_WORKERS="1,2,3".
 ENV FW_TAMANOS="256,512,1024,2048" \
     FW_WORKERS="1,2,4,8,16,32" \
     FW_REPETICIONES="5" \
@@ -84,14 +72,17 @@ ENV FW_TAMANOS="256,512,1024,2048" \
     FW_INTERVALO_MONITOR="0.5" \
     RAY_NUM_CPUS="" \
     RAY_OBJECT_STORE_MEMORY="" \
-    # Caché JIT de CuPy en disco local del contenedor (evita conflictos si
-    # el mismo directorio de trabajo se monta en varios contenedores).
     CUPY_CACHE_DIR="/tmp/cupy_cache"
 
-# Puerto del dashboard de Ray
 EXPOSE 8265
-
 USER investigador
-
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["bash"]
+
+# ── Etapa GPU: agrega CuPy + CUDA sobre el stage cpu ────────────────────────
+# Build: docker build --target gpu -t floyd-warshall-ray:gpu .
+FROM cpu AS gpu
+
+USER root
+RUN pip install "cupy-cuda12x[ctk]>=13.0.0" nvidia-ml-py>=12.0.0
+USER investigador

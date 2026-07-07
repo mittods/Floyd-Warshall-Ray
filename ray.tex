@@ -367,9 +367,13 @@ segmentada single.}
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{graficos/consumo_cpu_ram.pdf}}
-\caption{RAM pico del sistema para variantes single-GPU ($n > 2048$).
-Los valores para $n \leq 2048$ son cero por artefacto de muestreo:
-el experimento termina antes del primer \textit{tick} del monitor.}
+\caption{RAM pico del proceso (RSS) para variantes single-GPU
+($n > 2048$). Se reporta la memoria del propio proceso Python, no la
+del sistema completo: en un nodo Patagón compartido, la RAM total del
+sistema no aísla el consumo del experimento de otros procesos y del
+propio Ray, por lo que no escala con $n$. Los valores para
+$n \leq 2048$ se omiten por el mismo artefacto de muestreo: el
+experimento termina antes del primer \textit{tick} del monitor.}
 \label{fig:cpu_ram}
 \end{figure}
 

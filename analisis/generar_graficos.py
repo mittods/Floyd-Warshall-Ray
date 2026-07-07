@@ -10,7 +10,8 @@ Gráficos generados:
     tiempo_vs_tamano.pdf         Tiempo total seq vs. Ray por n (E1)
     eficiencia_vs_workers.pdf    Eficiencia paralela vs. workers (E2 y E5)
     escalabilidad_debil.pdf      Tiempo normalizado (grupo E3)
-    consumo_cpu_ram.pdf          CPU% y RAM por configuración (E1)
+    consumo_cpu_ram.pdf          RAM pico del proceso, variantes single-GPU
+                                 (medición aislada, ver medir_ram_aislado.py)
     consumo_energia.pdf          Energía por configuración (E1, E2, E5)
 """
 import logging
@@ -297,40 +298,63 @@ def grafico_escalabilidad_debil(df: pd.DataFrame) -> None:
 
 
 def grafico_recursos(df: pd.DataFrame) -> None:
-    """RAM pico del sistema para variantes single-GPU (n > 2048)."""
-    NS = [4096, 8192, 16384]
+    """RAM pico del proceso para variantes single-GPU.
+
+    A diferencia de las demás figuras, esta NO lee la columna
+    ram_proceso_pico_mb_promedio de resultados_agregados.json (el
+    parámetro df se ignora a propósito). Esa columna, aunque ya aísla
+    el proceso del sistema (RSS vía psutil.Process), sigue contaminada
+    por un segundo problema: todos los escenarios de una corrida se
+    ejecutan dentro de un único proceso Python (un solo ray.init() en
+    ejecutar_benchmarks.main()), y como CPython/glibc/CUDA no le
+    devuelven memoria liberada al SO entre escenarios, el "pico" de un
+    escenario incluye lo que ya habían reservado los anteriores en el
+    mismo proceso.
+
+    Esta figura usa en cambio resultados/ram_aislada/ram_aislada_agregado.json,
+    generado por experimentos/medir_ram_aislado.py, donde cada
+    combinación (algoritmo, n, repetición) corre en su propio proceso
+    del sistema operativo — el RSS medido ahí sí es exclusivamente el
+    de esa ejecución. Ver el docstring de ese script para el detalle.
+    """
+    ruta_aislada = DIR_RESULTADOS / "ram_aislada" / "ram_aislada_agregado.json"
+    if not ruta_aislada.exists():
+        logger.warning(
+            "No se encontró %s. Ejecute primero "
+            "'python -m experimentos.medir_ram_aislado' (ver scripts/patagon/"
+            "submit_ram_aislada.sbatch) para generar la medición de RAM aislada.",
+            ruta_aislada,
+        )
+        return
+
+    df_ram = pd.read_json(ruta_aislada)
+
+    NS = sorted(df_ram["n"].unique().tolist())
     series = [
         ("gpu_secuencial", "GPU básica",        0),
         ("gpu_blocked",    "GPU segmentada",    1),
         ("gpu_ray",        "GPU+Ray (1 actor)", 2),
     ]
 
-    col_ram = "ram_pico_mb_promedio"
-    if col_ram not in df.columns:
-        logger.warning("Sin métrica ram_pico_mb_promedio.")
-        return
+    col_ram = "ram_proceso_pico_mb_promedio"
 
-    def _val(alg, n, actores=None):
-        mask = (df["algoritmo"] == alg) & (df["n"] == n)
-        if actores is not None:
-            mask &= df["num_actores"] == actores
-        sub = df[mask]
+    def _val(alg, n):
+        sub = df_ram[(df_ram["algoritmo"] == alg) & (df_ram["n"] == n)]
         return float(sub[col_ram].iloc[0]) / 1024 if not sub.empty else 0.0
 
     x = np.arange(len(NS))
     width = 0.25
-    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+    fig, ax = plt.subplots(figsize=(5.5, 2.8))
 
     for i, (alg, label, ci) in enumerate(series):
-        actores = 1 if alg == "gpu_ray" else None
-        vals = [_val(alg, n, actores) for n in NS]
+        vals = [_val(alg, n) for n in NS]
         ax.bar(x + (i - 1) * width, vals, width, label=label, color=COLORES[ci])
 
     ax.set_xticks(x)
     ax.set_xticklabels(NS)
     ax.set_xlabel("Tamaño $n$")
-    ax.set_ylabel("RAM pico (GB)")
-    ax.set_title("Memoria RAM del sistema")
+    ax.set_ylabel("RAM pico del proceso (GB)")
+    ax.set_title("Memoria RAM del proceso (medición aislada)")
     ax.legend(fontsize=7)
     ax.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
@@ -537,6 +561,7 @@ def main() -> None:
 
     df_agg = df[df["tiempo_media"].notna()].copy()
     for col in ["cpu_uso_promedio_pct_promedio", "ram_pico_mb_promedio",
+                "ram_proceso_pico_mb_promedio",
                 "gpu_uso_pct_promedio", "energia_total_j_promedio"]:
         if col in df_agg.columns:
             df_agg[col] = df_agg[col].fillna(0.0)
